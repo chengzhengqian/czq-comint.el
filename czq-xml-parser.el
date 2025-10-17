@@ -137,6 +137,122 @@ strings.  Malformed pairs raise an error."
               (push (cons name value) pairs))))))
     (nreverse pairs)))
 
+(defun czq-xml-parser--step-text (state char results)
+  "Handle CHAR while parser STATE is in :text mode, updating RESULTS.
+Return a cons cell (RESULTS . REPROCESS)."
+  (if (= char ?<)
+      (progn
+        (czq-xml-parser--start-pending state char)
+        (setf (czq-xml-parser-state-mode state) :tag-open)
+        (cons results nil))
+    (push char (czq-xml-parser-state-text-chars state))
+    (cons results nil)))
+
+(defun czq-xml-parser--step-tag-open (state char tag-name results)
+  "Handle CHAR when STATE expects the first char of TAG-NAME.
+Return a cons cell (RESULTS . REPROCESS)."
+  (let ((expected (aref tag-name 0)))
+    (if (char-equal char expected)
+        (progn
+          (push char (czq-xml-parser-state-pending-chars state))
+          (setf (czq-xml-parser-state-tag-progress state) 1)
+          (setf (czq-xml-parser-state-mode state) :tag-name)
+          (cons results nil))
+      (czq-xml-parser--append-pending-to-text state)
+      (setf (czq-xml-parser-state-mode state) :text)
+      (cons results t))))
+
+(defun czq-xml-parser--step-tag-name (state char tag-name tag-length results)
+  "Handle CHAR while matching TAG-NAME in STATE.
+Return a cons cell (RESULTS . REPROCESS)."
+  (let ((progress (czq-xml-parser-state-tag-progress state)))
+    (if (and (< progress tag-length)
+             (char-equal char (aref tag-name progress)))
+        (progn
+          (push char (czq-xml-parser-state-pending-chars state))
+          (setf (czq-xml-parser-state-tag-progress state) (1+ progress))
+          (when (= (1+ progress) tag-length)
+            (setf (czq-xml-parser-state-mode state) :tag-post-name))
+          (cons results nil))
+      (czq-xml-parser--append-pending-to-text state)
+      (setf (czq-xml-parser-state-mode state) :text)
+      (cons results t))))
+
+(defun czq-xml-parser--step-tag-post-name (state char results)
+  "Handle CHAR after the tag name has been matched.
+Return a cons cell (RESULTS . REPROCESS)."
+  (cond
+   ((memq char '(?\s ?\t ?\n ?\r ?\f))
+    (setf (czq-xml-parser-state-mode state) :tag-attr)
+    (push char (czq-xml-parser-state-attr-chars state))
+    (cons results nil))
+   ((= char ?>)
+    (setf (czq-xml-parser-state-current-attr state) "")
+    (setf (czq-xml-parser-state-mode state) :tag-body)
+    (setf (czq-xml-parser-state-pending-chars state) nil)
+    (setf (czq-xml-parser-state-tag-progress state) 0)
+    (setf (czq-xml-parser-state-body-chars state) nil)
+    (setf (czq-xml-parser-state-closing-chars state) nil)
+    (setf (czq-xml-parser-state-closing-progress state) 0)
+    (cons (czq-xml-parser--flush-text state results) nil))
+   (t
+    (setf (czq-xml-parser-state-mode state) :tag-attr)
+    (push char (czq-xml-parser-state-attr-chars state))
+    (cons results nil))))
+
+(defun czq-xml-parser--step-tag-attr (state char results)
+  "Handle CHAR while STATE is gathering attribute characters.
+Return a cons cell (RESULTS . REPROCESS)."
+  (if (= char ?>)
+      (let ((attr (string-trim
+                   (czq-xml-parser--chars->string
+                    (or (czq-xml-parser-state-attr-chars state) '())))))
+        (setf (czq-xml-parser-state-current-attr state) attr)
+        (setf (czq-xml-parser-state-attr-chars state) nil)
+        (setf (czq-xml-parser-state-mode state) :tag-body)
+        (setf (czq-xml-parser-state-pending-chars state) nil)
+        (setf (czq-xml-parser-state-tag-progress state) 0)
+        (setf (czq-xml-parser-state-body-chars state) nil)
+        (setf (czq-xml-parser-state-closing-chars state) nil)
+        (setf (czq-xml-parser-state-closing-progress state) 0)
+        (cons (czq-xml-parser--flush-text state results) nil))
+    (push char (czq-xml-parser-state-attr-chars state))
+    (cons results nil)))
+
+(defun czq-xml-parser--step-tag-body (state char closing-pattern closing-length results)
+  "Handle CHAR while STATE is consuming the tag body.
+Return a cons cell (RESULTS . REPROCESS)."
+  (let ((closing-progress (czq-xml-parser-state-closing-progress state)))
+    (if (zerop closing-progress)
+        (if (= char ?<)
+            (progn
+              (push char (czq-xml-parser-state-closing-chars state))
+              (setf (czq-xml-parser-state-closing-progress state) 1)
+              (cons results nil))
+          (push char (czq-xml-parser-state-body-chars state))
+          (cons results nil))
+      (let ((expected (aref closing-pattern closing-progress)))
+        (if (char-equal char expected)
+            (progn
+              (push char (czq-xml-parser-state-closing-chars state))
+              (let ((new-progress (1+ closing-progress)))
+                (setf (czq-xml-parser-state-closing-progress state) new-progress)
+                (if (= new-progress closing-length)
+                    (let* ((body (czq-xml-parser--chars->string
+                                  (or (czq-xml-parser-state-body-chars state) '())))
+                           (attr (or (czq-xml-parser-state-current-attr state) ""))
+                           (attr-list (czq-xml-parser-parse-attributes attr)))
+                      (push (cons attr-list body) results)
+                      (setf (czq-xml-parser-state-mode state) :text)
+                      (setf (czq-xml-parser-state-body-chars state) nil)
+                      (setf (czq-xml-parser-state-current-attr state) nil)
+                      (setf (czq-xml-parser-state-closing-chars state) nil)
+                      (setf (czq-xml-parser-state-closing-progress state) 0)
+                      (cons results nil))
+                  (cons results nil))))
+          (czq-xml-parser--rewind-closing state)
+          (cons results t))))))
+
 (defun czq-xml-parser-format-state (state)
   "Return a human-readable summary describing parser STATE."
   (unless (czq-xml-parser-state-p state)
@@ -190,7 +306,7 @@ STATE is an instance of `czq-xml-parser-state'.  CHUNK should be a
 string (nil is treated as an empty string).  The second value in the
 returned cons cell is the list of concrete parse results produced by
 this invocation.  Plain text segments are emitted as strings; parsed
-tags are emitted as cons cells whose car is the attribute string and
+tags are emitted as cons cells whose car is an attribute alist and
 cdr is the tag body."
   (unless (czq-xml-parser-state-p state)
     (setq state (czq-xml-parser-state-create)))
@@ -206,107 +322,25 @@ cdr is the tag body."
       (let ((char (aref chunk i))
             (advance t))
         (while advance
-          (pcase (czq-xml-parser-state-mode state)
-            (':text
-             (if (= char ?<)
-                 (progn
-                   (czq-xml-parser--start-pending state char)
-                   (setf (czq-xml-parser-state-mode state) :tag-open)
-                   (setq advance nil))
-               (push char (czq-xml-parser-state-text-chars state))
-               (setq advance nil)))
-            (':tag-open
-             (let ((expected (aref tag-name 0)))
-               (if (char-equal char expected)
-                   (progn
-                     (push char (czq-xml-parser-state-pending-chars state))
-                     (setf (czq-xml-parser-state-tag-progress state) 1)
-                     (setf (czq-xml-parser-state-mode state) :tag-name)
-                     (setq advance nil))
-                 (czq-xml-parser--append-pending-to-text state)
-                 (setf (czq-xml-parser-state-mode state) :text))))
-            (':tag-name
-             (let ((progress (czq-xml-parser-state-tag-progress state)))
-               (if (and (< progress tag-length)
-                        (char-equal char (aref tag-name progress)))
-                   (progn
-                     (push char (czq-xml-parser-state-pending-chars state))
-                     (setf (czq-xml-parser-state-tag-progress state) (1+ progress))
-                     (when (= (1+ progress) tag-length)
-                       (setf (czq-xml-parser-state-mode state) :tag-post-name))
-                     (setq advance nil))
-                 (czq-xml-parser--append-pending-to-text state)
-                 (setf (czq-xml-parser-state-mode state) :text))))
-            (':tag-post-name
-             (cond
-              ((memq char '(?\s ?\t ?\n ?\r ?\f))
-               (setf (czq-xml-parser-state-mode state) :tag-attr)
-               (push char (czq-xml-parser-state-attr-chars state))
-               (setq advance nil))
-              ((= char ?>)
-               (setf (czq-xml-parser-state-current-attr state) "")
-               (setf (czq-xml-parser-state-mode state) :tag-body)
-               (setf (czq-xml-parser-state-pending-chars state) nil)
-               (setf (czq-xml-parser-state-tag-progress state) 0)
-               (setf (czq-xml-parser-state-body-chars state) nil)
-               (setf (czq-xml-parser-state-closing-chars state) nil)
-               (setf (czq-xml-parser-state-closing-progress state) 0)
-               (setq results (czq-xml-parser--flush-text state results))
-               (setq advance nil))
-              (t
-               (setf (czq-xml-parser-state-mode state) :tag-attr)
-               (push char (czq-xml-parser-state-attr-chars state))
-               (setq advance nil))))
-            (':tag-attr
-             (if (= char ?>)
-                 (let ((attr (string-trim
-                              (czq-xml-parser--chars->string
-                               (or (czq-xml-parser-state-attr-chars state) '())))))
-                   (setf (czq-xml-parser-state-current-attr state) attr)
-                   (setf (czq-xml-parser-state-attr-chars state) nil)
-                   (setf (czq-xml-parser-state-mode state) :tag-body)
-                   (setf (czq-xml-parser-state-pending-chars state) nil)
-                   (setf (czq-xml-parser-state-tag-progress state) 0)
-                   (setf (czq-xml-parser-state-body-chars state) nil)
-                   (setf (czq-xml-parser-state-closing-chars state) nil)
-                   (setf (czq-xml-parser-state-closing-progress state) 0)
-                   (setq results (czq-xml-parser--flush-text state results))
-                   (setq advance nil))
-               (push char (czq-xml-parser-state-attr-chars state))
-               (setq advance nil)))
-            (':tag-body
-             (let ((closing-progress (czq-xml-parser-state-closing-progress state)))
-               (if (zerop closing-progress)
-                   (if (= char ?<)
-                       (progn
-                         (push char (czq-xml-parser-state-closing-chars state))
-                         (setf (czq-xml-parser-state-closing-progress state) 1)
-                         (setq advance nil))
-                     (push char (czq-xml-parser-state-body-chars state))
-                     (setq advance nil))
-                 (let ((expected (aref closing-pattern closing-progress)))
-                   (if (char-equal char expected)
-                       (progn
-                         (push char (czq-xml-parser-state-closing-chars state))
-                         (let ((new-progress (1+ closing-progress)))
-                           (setf (czq-xml-parser-state-closing-progress state) new-progress)
-                           (if (= new-progress closing-length)
-                               (let* ((body (czq-xml-parser--chars->string
-                                             (or (czq-xml-parser-state-body-chars state) '())))
-                                      (attr (or (czq-xml-parser-state-current-attr state) ""))
-                                      (attr-list (czq-xml-parser-parse-attributes attr)))
-                                 (push (cons attr-list body) results)
-                                 (setf (czq-xml-parser-state-mode state) :text)
-                                 (setf (czq-xml-parser-state-body-chars state) nil)
-                                 (setf (czq-xml-parser-state-current-attr state) nil)
-                                 (setf (czq-xml-parser-state-closing-chars state) nil)
-                                 (setf (czq-xml-parser-state-closing-progress state) 0)
-                                 (setq advance nil))
-                             (setq advance nil))))
-                     (czq-xml-parser--rewind-closing state))))))
-            (_
-             (error "Unknown czq-xml-parser state: %S"
-                    (czq-xml-parser-state-mode state)))))
+          (pcase-let* ((`(,new-results . ,reprocess)
+                        (pcase (czq-xml-parser-state-mode state)
+                          (':text
+                           (czq-xml-parser--step-text state char results))
+                          (':tag-open
+                           (czq-xml-parser--step-tag-open state char tag-name results))
+                          (':tag-name
+                           (czq-xml-parser--step-tag-name state char tag-name tag-length results))
+                          (':tag-post-name
+                           (czq-xml-parser--step-tag-post-name state char results))
+                          (':tag-attr
+                           (czq-xml-parser--step-tag-attr state char results))
+                          (':tag-body
+                           (czq-xml-parser--step-tag-body state char closing-pattern closing-length results))
+                          (_
+                           (error "Unknown czq-xml-parser state: %S"
+                                  (czq-xml-parser-state-mode state))))))
+            (setq results new-results)
+            (setq advance reprocess)))
         (setq i (1+ i))))
     (setq results (czq-xml-parser--flush-text state results))
     (cons state (nreverse results))))
