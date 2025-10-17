@@ -48,7 +48,8 @@ Finally, provide the closing tag and review the emitted tokens:
 
 The formatter output now shows the parser back in `:text` mode, the body buffer
 cleared, and the `Tokens` line containing one parsed tag followed by the
-remaining `"tail"` text fragment.
+remaining `"tail"` text fragment.  Each tag now appears as
+`((ATTR . VALUE) ... . BODY)`, where the car is an alist of attribute strings.
 
 ## Parsing Attributes
 
@@ -60,6 +61,9 @@ helper:
 ;; => (("a" . "x") ("b" . "y") ("c" . "123"))
 ```
 
+;; Tokens line now looks like:
+;; Tokens: (((("lang" . "elisp")) . "(print 1)") "tail")
+
 ## Handling Partial Tags
 
 To see how the parser recovers from truncated tag boundaries, start a fresh
@@ -67,7 +71,7 @@ state and feed a broken opening tag followed by a valid block:
 
 ```emacs-lisp
 (setq czq-demo-state nil)
-(setq czq-demo-step (czq-xml-parser-step czq-demo-state "<czq"))
+(setq czq-demo-step (czq-xml-parser-step czq-demo-state "<czq "))
 (message "%s" (czq-xml-parser-format-step czq-demo-step))
 (setq czq-demo-state (car czq-demo-step))
 ;; The partial sequence is emitted as plain text and the state returns to :text.
@@ -81,7 +85,7 @@ terminator arrives:
 
 ```emacs-lisp
 (setq czq-demo-state nil)
-(setq czq-demo-step (czq-xml-parser-step czq-demo-state "<czq-comint>body</czq"))
+(setq czq-demo-step (czq-xml-parser-step czq-demo-state "<czq-comint>body</czq "))
 (message "%s" (czq-xml-parser-format-step czq-demo-step))
 (setq czq-demo-state (car czq-demo-step))
 

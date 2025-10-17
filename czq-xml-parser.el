@@ -293,8 +293,9 @@ cdr is the tag body."
                            (if (= new-progress closing-length)
                                (let* ((body (czq-xml-parser--chars->string
                                              (or (czq-xml-parser-state-body-chars state) '())))
-                                      (attr (or (czq-xml-parser-state-current-attr state) "")))
-                                 (push (cons attr body) results)
+                                      (attr (or (czq-xml-parser-state-current-attr state) ""))
+                                      (attr-list (czq-xml-parser-parse-attributes attr)))
+                                 (push (cons attr-list body) results)
                                  (setf (czq-xml-parser-state-mode state) :text)
                                  (setf (czq-xml-parser-state-body-chars state) nil)
                                  (setf (czq-xml-parser-state-current-attr state) nil)

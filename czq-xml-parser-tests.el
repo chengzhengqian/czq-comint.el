@@ -14,7 +14,7 @@
   (pcase-let* ((`(,state . ,tokens)
                 (czq-xml-parser-step nil "<czq-comint>body</czq-comint>")))
     (should (czq-xml-parser-state-p state))
-    (should (equal tokens '(("" . "body"))))))
+    (should (equal tokens '((nil . "body"))))))
 
 (ert-deftest czq-xml-parser-streaming-chunks ()
   (let* ((step1 (czq-xml-parser-step nil "hello <czq-"))
@@ -27,7 +27,7 @@
       (should (null tokens2))
       (pcase-let* ((`(,state3 . ,tokens3)
                     (czq-xml-parser-step state2 "</czq-comint>world")))
-        (should (equal tokens3 '(( "lang=\"elisp\"" . "(print 1)") "world")))
+        (should (equal tokens3 '(((("lang" . "elisp")) . "(print 1)") "world")))
         (should (eq state2 state3))))))
 
 (ert-deftest czq-xml-parser-ignores-false-close ()
@@ -36,13 +36,13 @@
     (should (null tokens))
     (pcase-let* ((`(,state2 . ,tokens2)
                   (czq-xml-parser-step state "></czq-comint>")))
-      (should (equal tokens2 '(("" . "</no>"))))
+      (should (equal tokens2 '((nil . "</no>"))))
       (should (eq state state2)))))
 
 (ert-deftest czq-xml-parser-trims-attributes ()
   (pcase-let* ((`(_ . ,tokens)
-                (czq-xml-parser-step nil "<czq-comint   foo=\"1\"   bar>body</czq-comint>")))
-    (should (equal tokens '(("foo=\"1\"   bar" . "body"))))))
+                (czq-xml-parser-step nil "<czq-comint   foo=\"1\"   bar=yes>body</czq-comint>")))
+    (should (equal tokens '(((("foo" . "1") ("bar" . "yes")) . "body"))))))
 
 (ert-deftest czq-xml-parser-parse-attributes-basic ()
   (should (equal (czq-xml-parser-parse-attributes "a=x b=y")
@@ -64,7 +64,7 @@
     (should (eq (czq-xml-parser-state-mode state1) :text))
     (pcase-let* ((`(_ . ,tokens2)
                   (czq-xml-parser-step state1 "<czq-comint>ok</czq-comint>")))
-      (should (equal tokens2 '(("" . "ok")))))))
+      (should (equal tokens2 '((nil . "ok")))))))
 
 (ert-deftest czq-xml-parser-close-prefix-treated-as-body ()
   "A malformed closing prefix should be preserved in the body and not break parsing."
@@ -77,7 +77,7 @@
     (should (= (czq-xml-parser-state-closing-progress state1) 0))
     (pcase-let* ((`(_ . ,tokens2)
                   (czq-xml-parser-step state1 "</czq-comint>tail")))
-      (should (equal tokens2 '(("" . "body</czq ") "tail"))))))
+      (should (equal tokens2 '((nil . "body</czq ") "tail"))))))
 
 (provide 'czq-xml-parser-tests)
 
