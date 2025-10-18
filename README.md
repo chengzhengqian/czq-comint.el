@@ -24,7 +24,7 @@ terminal flow.
 (straight-use-package
  '(czq-comint :type git
               :host github
-              :repo "chengzhengqian/czq-comint"))
+              :repo "chengzhengqian/czq-comint.el"))
 
 (use-package czq-comint
   :straight t
@@ -84,4 +84,3 @@ emacs --batch -L . \
 
 For manual smoke tests, feed `scripts/czq-comint-emit-tag.sh` into a
 `czq-comint-mode` buffer and confirm the expected handler output or omission.
-
