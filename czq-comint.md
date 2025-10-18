@@ -17,7 +17,7 @@ workflow you can run inside `*scratch*` while developing.
 Start a fresh buffer state and feed it simulated terminal output:
 
 ```elisp
-(let ((output "<czq-comint handler=\"elisp\">(+ 1 2)</czq-comint>"))
+(let ((output "<czq-comint handler=\"elisp\" results=\"true\">(+ 1 2)</czq-comint>"))
   (with-temp-buffer
     (czq-comint-mode)
     (list
@@ -35,12 +35,37 @@ To observe streaming behaviour, split the tag across chunks:
   (czq-comint-mode)
   (list
    (czq-comint--preoutput-filter "<czq-comint handler=\"el")
-   (czq-comint--preoutput-filter "isp\">(+ 4 5)</czq-comint>")
+   (czq-comint--preoutput-filter "isp\" results=\"true\">(+ 4 5)</czq-comint>")
    (czq-xml-parser-format-state czq-comint--parser-state)))
 ```
 
 The list returned is `("" "9\n" STATE)` which confirms the first chunk keeps
 the parser mid-tag and the second produces the handler output.
+
+By default the built-in `elisp` handler evaluates code for its side effects only.
+Add `results="true"` (or any `true`/`yes` style value) to surface the printed
+result; errors always surface regardless of the attribute.
+
+## Launching Sessions
+
+Configure per-buffer startup commands by extending
+`czq-comint-command-alist`.  Each entry matches a substring in the buffer
+name you pass to `czq-comint-run`.  When matched, the command is injected into
+the new bash session once it starts; otherwise the shell opens without extra
+input.
+
+```elisp
+(setq czq-comint-command-alist
+      '(("python" . "python3")
+        ("sql"    . "psql")))
+```
+
+Then invoke:
+
+```elisp
+(czq-comint-run "*CZQ Python*") ; runs python3 inside bash
+(czq-comint-run "*CZQ Notes*")  ; plain bash shell
+```
 
 ## Running Tests
 

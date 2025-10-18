@@ -18,6 +18,7 @@
 
 ;;; Code:
 
+(require 'subr-x)
 (require 'comint)
 (require 'czq-xml-parser)
 
@@ -41,6 +42,16 @@
     (omit . czq-comint--handle-omit))
   "Default handler table used by `czq-comint-handlers'.")
 
+(defcustom czq-comint-command-alist nil
+  "Alist mapping symbolic names to shell commands.
+
+Each entry has the form (NAME . COMMAND).  When `czq-comint-run' is
+invoked with a buffer name containing NAME (case-insensitive match),
+COMMAND is executed after the shell starts.  If no entry matches the
+buffer name the shell starts without running an additional command."
+  :type '(alist :key-type string :value-type string)
+  :group 'czq-comint)
+
 (defcustom czq-comint-handlers czq-comint--default-handlers
   "Alist mapping handler names to functions.
 
@@ -55,26 +66,30 @@ body as a string and the remaining attribute alist."
   "Buffer-local parser state used by the comint output filter.")
 
 (defun czq-comint--handle-elisp (body attrs)
-  "Evaluate BODY as Emacs Lisp and return a printable result.
+  "Evaluate BODY as Emacs Lisp and optionally return printed results.
 
 ATTRS is the attribute alist excluding the handler entry.  Multiple
-expressions in BODY are evaluated sequentially; the return value is the
-stringified result of the final expression.  Errors are reported as
-strings."
-  (ignore attrs)
-  (condition-case err
-      (with-temp-buffer
-        (insert body)
-        (goto-char (point-min))
-        (let ((results '()))
-          (condition-case nil
-              (while t
-                (push (eval (read (current-buffer))) results))
-            (end-of-file nil))
-          (if results
-              (concat (mapconcat #'prin1-to-string (nreverse results) "\n") "\n")
-            "")))
-    (error (format "[czq-comint elisp error] %s" (error-message-string err)))))
+expressions in BODY are evaluated sequentially.  By default the handler
+suppresses printed output unless the attribute \"results\" is set to a
+truthy value (for example results=\"true\").  Errors are reported as
+strings regardless of the attribute."
+  (let ((emit-results (czq-comint--attr-truthy-p attrs "results")))
+    (condition-case err
+        (let ((output
+               (with-temp-buffer
+                 (insert body)
+                 (goto-char (point-min))
+                 (let ((results '()))
+                   (condition-case nil
+                       (while t
+                         (push (eval (read (current-buffer))) results))
+                     (end-of-file nil))
+                   (if results
+                       (concat (mapconcat #'prin1-to-string (nreverse results) "\n")
+                               "\n")
+                     "")))))
+          (if emit-results output ""))
+      (error (format "[czq-comint elisp error] %s" (error-message-string err))))))
 
 (defun czq-comint--handle-omit (_body _attrs)
   "Ignore the BODY for tags whose handler is `omit'."
@@ -123,6 +138,39 @@ FORMAT-STRING and ARGS follow `message'."
          name-str)))
    attrs
    " "))
+
+(defun czq-comint--command-for-buffer (buffer-name)
+  "Return command string for BUFFER-NAME based on `czq-comint-command-alist'."
+  (let ((case-fold-search t))
+    (catch 'command
+      (dolist (entry czq-comint-command-alist nil)
+        (when (and (car entry)
+                   (cdr entry)
+                   (string-match-p (regexp-quote (car entry)) buffer-name))
+          (throw 'command (cdr entry)))))))
+
+(defun czq-comint--find-attr (attrs name)
+  "Return the attribute cons for NAME within ATTRS, or nil.
+NAME is matched case-insensitively."
+  (let ((target (downcase (if (symbolp name) (symbol-name name) name))))
+    (catch 'found
+      (dolist (pair attrs nil)
+        (let ((key (car pair)))
+          (when (and (stringp key)
+                     (string-equal (downcase key) target))
+            (throw 'found pair)))))))
+
+(defun czq-comint--attr-truthy-p (attrs name)
+  "Return non-nil when attribute NAME within ATTRS is truthy.
+Recognises common true-ish string values such as \"true\", \"t\", \"yes\", and \"1\"."
+  (let* ((entry (czq-comint--find-attr attrs name))
+         (value (and entry (cdr entry))))
+    (cond
+     ((null entry) nil)
+     ((null value) t)
+     ((stringp value)
+      (member (downcase value) '("1" "on" "t" "true" "yes")))
+     (t value))))
 
 (defun czq-comint--fallback-token (attrs body)
   "Reconstruct original tag for ATTRS and BODY when dispatch fails."
@@ -193,6 +241,13 @@ FORMAT-STRING and ARGS follow `message'."
 (defvar czq-comint--buffer-name "*CZQ Comint*"
   "Name of the buffer used for CZQ comint interactions.")
 
+(defun czq-comint--process-name (buffer-name)
+  "Return a process name derived from BUFFER-NAME."
+  (let* ((trimmed (string-trim (replace-regexp-in-string "\\`\\*\\|\\*\\'" "" buffer-name))))
+    (if (string-empty-p trimmed)
+        "czq-comint"
+      trimmed)))
+
 (defun czq-comint--make-parser-state ()
   "Create a fresh parser state tuned for `czq-comint-tag-name'."
   (czq-xml-parser-state-create :tag-name czq-comint-tag-name))
@@ -221,10 +276,43 @@ The core functionality is not implemented yet."
             nil t))
 
 ;;;###autoload
-(defun czq-comint-run ()
-  "Create or reuse a CZQ comint buffer and switch to it."
-  (interactive)
-  (user-error "czq-comint-run is not implemented yet"))
+(defun czq-comint-run (buffer-name)
+  "Create or reuse a CZQ comint BUFFER-NAME and switch to it.
+
+If BUFFER-NAME contains an entry from `czq-comint-command-alist', the
+matching command is executed once the shell is ready.  Otherwise the
+buffer starts a plain bash session."
+  (interactive
+   (list (read-string "CZQ comint buffer name: "
+                      (or (and (derived-mode-p 'czq-comint-mode)
+                               (buffer-name))
+                          czq-comint--buffer-name))))
+  (unless (and buffer-name (stringp buffer-name) (not (string-empty-p buffer-name)))
+    (user-error "BUFFER-NAME must be a non-empty string"))
+  (let* ((buffer (get-buffer-create buffer-name))
+         (command (czq-comint--command-for-buffer buffer-name))
+         (shell (or (executable-find "bash")
+                    shell-file-name
+                    (user-error "Unable to locate bash or default shell")))
+         (process-name (czq-comint--process-name buffer-name))
+         (existing-proc (get-buffer-process buffer))
+         (process existing-proc)
+         (newly-started nil))
+    (unless (and process (process-live-p process))
+      (when (and process (not (process-live-p process)))
+        (delete-process process))
+      (make-comint-in-buffer process-name buffer shell nil)
+      (setq process (get-buffer-process buffer))
+      (setq newly-started t))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'czq-comint-mode)
+        (czq-comint-mode))
+      (setq-local czq-comint--buffer-name buffer-name))
+    (when (and newly-started (processp process))
+      (set-process-query-on-exit-flag process nil)
+      (when (and command (not (string-empty-p command)))
+        (comint-send-string process (concat command "\n"))))
+    (pop-to-buffer-same-window buffer)))
 
 ;;;###autoload
 (defun czq-comint-execute-tag (tag &optional buffer)
