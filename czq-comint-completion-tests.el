@@ -56,7 +56,7 @@
       (delete-directory temp-dir t))))
 
 (ert-deftest czq-comint-completion-refresh-from-process ()
-  "Process refresh should extract PATH from redirected output."
+  "Process refresh should emit a tag that updates the command cache."
   (let* ((temp-dir (make-temp-file "czq-path-proc" t))
          (script (expand-file-name "bar" temp-dir)))
     (unwind-protect
@@ -64,37 +64,51 @@
           (with-temp-file script
             (insert "#!/bin/sh\n"))
           (set-file-modes script #o755)
-          (let ((captured-command nil)
-                (comint-redirect-completed nil)
-                (messages '()))
-            (with-temp-buffer
-              (setq-local czq-comint-completion-command-list '())
-              (setq-local czq-comint-completion--cached-commands nil)
-              (cl-letf (((symbol-function 'comint-redirect-send-command-to-process)
-                         (lambda (command output-buffer proc echo &optional no-display)
-                           (setq captured-command command)
-                           (with-current-buffer output-buffer
-                             (erase-buffer)
-                             (insert (format "__CZQ_PATH__=%s\n" temp-dir)))
-                           (setq comint-redirect-completed t)
-                           command))
-                        ((symbol-function 'called-interactively-p)
-                         (lambda (&rest _) t))
-                        ((symbol-function 'message)
-                         (lambda (fmt &rest args)
-                           (push (apply #'format fmt args) messages))))
-                (let ((dummy-process (start-process "czq-completion-test" (current-buffer) "cat")))
-                  (unwind-protect
-                      (progn
-                        (set-process-query-on-exit-flag dummy-process nil)
-                        (czq-comint-completion-refresh-from-process (current-buffer))
-                        (should (string-match-p "printf '__CZQ_PATH__" captured-command))
-                        (should (member "bar" czq-comint-completion--cached-commands))
-                        (should messages)
-                        (should (string-match-p "scanned 1 directories" (car messages)))
-                        (should (string-match-p "cached 1 commands" (car messages))))
-                    (when (process-live-p dummy-process)
-                      (delete-process dummy-process))))))))
+          (with-temp-buffer
+            (czq-comint-mode)
+            (setq-local czq-comint-completion-command-list '())
+            (setq-local czq-comint-completion--cached-commands nil)
+            (let ((dummy-process (start-process "czq-completion-test" (current-buffer) "cat")))
+              (unwind-protect
+                  (progn
+                    (set-process-query-on-exit-flag dummy-process nil)
+                    (let ((sent-command nil)
+                          (request-messages '()))
+                      (cl-letf (((symbol-function 'comint-send-string)
+                                 (lambda (_proc command)
+                                   (setq sent-command command)))
+                                ((symbol-function 'called-interactively-p)
+                                 (lambda (&rest _) t))
+                                ((symbol-function 'message)
+                                 (lambda (fmt &rest args)
+                                   (push (apply #'format fmt args) request-messages))))
+                        (czq-comint-completion-refresh-from-process (current-buffer)))
+                      (should sent-command)
+                      (should (string-match-p "czq_comint_path" sent-command))
+                      (should (string-match-p "printf \"<czq-comint handler=elisp>"
+                                              sent-command))
+                      (should-not (string-match-p "base64" sent-command))
+                      (should (string-match-p "<czq-comint handler=elisp>" sent-command))
+                      (should (cl-some (lambda (msg)
+                                         (string-match-p "requested PATH refresh" msg))
+                                       request-messages)))
+                    (let ((process-messages '()))
+                      (cl-letf (((symbol-function 'message)
+                                 (lambda (fmt &rest args)
+                                   (push (apply #'format fmt args) process-messages))))
+                        (czq-comint--handle-elisp
+                         (format "(czq-comint-completion-refresh %S 'process)"
+                                 temp-dir)
+                         nil))
+                      (should (member "bar" czq-comint-completion--cached-commands))
+                      (should (cl-some (lambda (msg)
+                                         (string-match-p "scanned 1 directories" msg))
+                                       process-messages))
+                      (should (cl-some (lambda (msg)
+                                         (string-match-p "(process)" msg))
+                                       process-messages))))
+                (when (process-live-p dummy-process)
+                  (delete-process dummy-process))))))
       (delete-directory temp-dir t))))
 
 (ert-deftest czq-comint-completion-refresh-message ()
@@ -119,6 +133,49 @@
               (should messages)
               (should (string-match-p "scanned 1 directories" (car messages)))
               (should (string-match-p "cached 2 commands" (car messages))))))
+      (delete-directory temp-dir t))))
+
+(ert-deftest czq-comint-completion-refresh-from-process-base64 ()
+  "Process refresh should support optional base64 encoding."
+  (let* ((temp-dir (make-temp-file "czq-path-proc-b64" t))
+         (script (expand-file-name "baz" temp-dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file script
+            (insert "#!/bin/sh\n"))
+          (set-file-modes script #o755)
+          (with-temp-buffer
+            (czq-comint-mode)
+            (setq-local czq-comint-completion-command-list '())
+            (setq-local czq-comint-completion--cached-commands nil)
+            (setq-local czq-comint-completion-use-base64 t)
+            (let ((dummy-process (start-process "czq-completion-test-b64" (current-buffer) "cat")))
+              (unwind-protect
+                  (progn
+                    (set-process-query-on-exit-flag dummy-process nil)
+                    (let ((sent-command nil))
+                      (cl-letf (((symbol-function 'comint-send-string)
+                                 (lambda (_proc command)
+                                   (setq sent-command command))))
+                        (czq-comint-completion-refresh-from-process (current-buffer)))
+                      (should sent-command)
+                      (should (string-match-p "base64" sent-command))
+                      (should (string-match-p "base64-decode-string" sent-command))))
+                    (let* ((process-messages '())
+                           (encoded (base64-encode-string temp-dir t)))
+                      (cl-letf (((symbol-function 'message)
+                                 (lambda (fmt &rest args)
+                                   (push (apply #'format fmt args) process-messages))))
+                        (czq-comint--handle-elisp
+                         (format "(czq-comint-completion-refresh (base64-decode-string %S) 'process)"
+                                 encoded)
+                         nil))
+                      (should (member "baz" czq-comint-completion--cached-commands))
+                      (should (cl-some (lambda (msg)
+                                         (string-match-p "scanned 1 directories" msg))
+                                       process-messages)))
+                (when (process-live-p dummy-process)
+                  (delete-process dummy-process))))))
       (delete-directory temp-dir t))))
 
 (ert-deftest czq-comint-completion-includes-files ()

@@ -91,8 +91,28 @@ mode starts, but you can ask the running shell for its live `$PATH` at any time:
 ```
 
 This is particularly handy after running `export PATH=…` within the REPL.  The
-command redirects a `printf` into the process, parses the resulting path, and
-refreshes the cached completion candidates in place.  File suggestions are
+command asks the shell to emit a `<czq-comint …>` tag that carries the live
+`$PATH`, escaping only backslashes and double quotes so the handler can pass the
+literal string to `czq-comint-completion-refresh` with a context of `'process`.
+It then emits a message
+such as `[czq-completion] scanned … (process)`.  Because the refresh travels
+through normal process output it is asynchronous—wait for that message before
+expecting new candidates.  If you switch to base64 mode, make sure the shell
+offers a `base64` utility (common on POSIX installations).
+
+When the cache is refreshed from inside Emacs (for example during mode
+initialisation or by calling `czq-comint-completion-refresh` manually) the code
+operates on the raw `$PATH` string from the current environment; no encoding is
+required.  If the shell environment includes characters that defeat the simple
+escaping, enable the buffer-local
+`czq-comint-completion-use-base64` (or call
+`czq-comint-completion-toggle-base64`).  In that mode the shell encodes the path
+with `base64`, the handler decodes it, and the rest of the workflow remains the
+same.  Projects that cannot rely on the binary can override
+`czq-comint-completion--process-refresh-command` to emit a differently quoted
+tag.
+
+File suggestions are
 drawn directly from `czq-comint-current-directory`, so the completion menu stays
 aligned with the prompt tracker.  Enable
 `czq-comint-completion-debug` (or call

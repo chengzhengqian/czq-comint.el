@@ -63,21 +63,28 @@ pulls in both `czq-comint.el` and the XML parser.
 
 ### Refresh PATH-aware completion
 
-- CZQ comint’s completion list combines `czq-comint-completion-command-list`
-  with executables discovered via the buffer’s `$PATH` and file names from the
-  tracked working directory.  On mode activation the cache is seeded from
-  Emacs’ own environment; run `czq-comint-completion-refresh-from-process`
-  after changing `$PATH` inside the REPL to pull the live shell value.
-- File suggestions follow `czq-comint-current-directory`, so completions stay in
-  sync with whatever the directory tracker reports.
+- Completions combine `czq-comint-completion-command-list`, executables found
+  on the buffer’s `$PATH`, and files rooted at
+  `czq-comint-current-directory`.  The cache is seeded from Emacs’ environment
+  when the mode starts.
+- After exporting a new path within the REPL, run
+  `M-x czq-comint-completion-refresh-from-process`.  By default the helper
+  prints a `<czq-comint>` tag whose body embeds the live `$PATH` with only
+  backslashes and double quotes escaped, so the `elisp` handler can call
+  `czq-comint-completion-refresh` with the literal string.  Wait for the
+  `[czq-completion] scanned … (process)` message before expecting new command
+  candidates.
+- If the shell environment contains tricky characters, enable the optional
+  base64 transport: set the buffer-local
+  `czq-comint-completion-use-base64` (or call
+  `czq-comint-completion-toggle-base64`).  In that mode the shell encodes the
+  path with `base64` and the handler decodes it before refreshing the cache.
+  Disable the toggle to fall back to plain quoting or override
+  `czq-comint-completion--process-refresh-command` with a custom strategy when
+  `base64` is unavailable.
 - Toggle `czq-comint-completion-debug` (or call
   `czq-comint-completion-toggle-debug`) to log whether the backend is offering
   command or file candidates.
-- File suggestions follow `czq-comint-current-directory`, so completions stay in
-  sync with whatever the directory tracker reports.
-- After exporting a new path inside the REPL, run
-  `M-x czq-comint-completion-refresh-from-process` to rescan the shell and
-  update the cached candidates immediately.
 
 ### Emit structured tags
 

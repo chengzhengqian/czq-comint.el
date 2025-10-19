@@ -78,7 +78,8 @@ expressions in BODY are evaluated sequentially.  By default the handler
 suppresses printed output unless the attribute \"results\" is set to a
 truthy value (for example results=\"true\").  Errors are reported as
 strings regardless of the attribute."
-  (let ((emit-results (czq-comint--attr-truthy-p attrs "results")))
+  (let ((emit-results (czq-comint--attr-truthy-p attrs "results"))
+        (origin (current-buffer)))
     (condition-case err
         (let ((output
                (with-temp-buffer
@@ -87,7 +88,9 @@ strings regardless of the attribute."
                  (let ((results '()))
                    (condition-case nil
                        (while t
-                         (push (eval (read (current-buffer))) results))
+                         (let ((form (read (current-buffer))))
+                           (with-current-buffer origin
+                             (push (eval form) results))))
                      (end-of-file nil))
                    (if results
                        (concat (mapconcat #'prin1-to-string (nreverse results) "\n")

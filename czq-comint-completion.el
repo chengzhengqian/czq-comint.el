@@ -19,6 +19,8 @@
 (require 'subr-x)
 (require 'comint)
 
+(defvar czq-comint-tag-name)
+
 (defgroup czq-comint-completion nil
   "Completion helpers for `czq-comint-mode'."
   :prefix "czq-comint-completion-"
@@ -39,12 +41,29 @@
 (defvar-local czq-comint-completion--cached-commands nil
   "Buffer-local cache of command candidates for completion.")
 
+(defvar-local czq-comint-completion-use-base64 nil
+  "When non-nil, encode PATH values with base64 in process refresh commands.")
+
 (defun czq-comint-completion-toggle-debug ()
   "Toggle `czq-comint-completion-debug' and report the new state."
   (interactive)
   (setq czq-comint-completion-debug (not czq-comint-completion-debug))
   (when (called-interactively-p 'any)
     (message "[czq-completion] debug %s" (if czq-comint-completion-debug "on" "off"))))
+
+(defun czq-comint-completion-toggle-base64 (&optional arg)
+  "Toggle use of base64 encoding for PATH refresh commands.
+With prefix ARG treat positive values as enable, non-positive as disable.
+Report the resulting state when called interactively."
+  (interactive "P")
+  (setq czq-comint-completion-use-base64
+        (if arg
+            (> (prefix-numeric-value arg) 0)
+          (not czq-comint-completion-use-base64)))
+  (when (called-interactively-p 'any)
+    (message "[czq-completion] base64 refresh %s"
+             (if czq-comint-completion-use-base64 "enabled" "disabled")))
+  czq-comint-completion-use-base64)
 
 (defun czq-comint-completion--file-candidates (prefix)
   "Return file candidates based on PREFIX and the tracked directory."
@@ -83,56 +102,75 @@ PATH defaults to the current `PATH' environment variable."
             (push (file-name-nondirectory entry) commands)))))
     (cons (delete-dups commands) scanned)))
 
-(defun czq-comint-completion-refresh (&optional path)
+(defun czq-comint-completion-refresh (&optional path source)
   "Refresh the buffer-local command cache using PATH if supplied.
-Returns the updated command list."
+
+When SOURCE is `process' emit a message indicating the refresh originated
+from the live process.  When called interactively a message is also emitted.
+
+PATH should be the literal string form of `$PATH`.  The process refresh
+handler base64-decodes its payload before invoking this function, so callers
+outside that path should pass plain text."
+  (interactive (list nil 'interactive))
   (let* ((result (czq-comint-completion--collect-path-commands path))
          (path-commands (car result))
          (directories (cdr result))
          (combined (delete-dups
                     (append czq-comint-completion-command-list
-                            path-commands))))
+                            path-commands)))
+         (context (or source
+                      (and (called-interactively-p 'any) 'interactive)))
+         (payload (list combined directories)))
     (setq czq-comint-completion--cached-commands combined)
-    (when (called-interactively-p 'any)
-      (message "[czq-completion] scanned %d directories; cached %d commands"
-               directories (length combined)))
-    (list combined directories)))
+    (when (memq context '(interactive process))
+      (message "[czq-completion] scanned %d directories; cached %d commands%s"
+               directories (length combined)
+               (if (eq context 'process) " (process)" "")))
+    payload))
 
 (defun czq-comint-completion-commands ()
   "Return the cached command list, refreshing it if necessary."
   (or czq-comint-completion--cached-commands
       (car (czq-comint-completion-refresh))))
 
+(defun czq-comint-completion--process-refresh-command ()
+  "Return shell source that emits a refresh tag with the current PATH.
+
+When `czq-comint-completion-use-base64' is non-nil the helper base64-encodes
+the value so we can embed it into the tag body without worrying about shell
+quoting.  Otherwise the command escapes backslashes and double quotes directly
+so Emacs can consume the literal string.  In the encoded case,
+`czq-comint-completion-refresh' receives a decoded string."
+  (let* ((tag (or czq-comint-tag-name "czq-comint")))
+    (if czq-comint-completion-use-base64
+        (format
+         (concat
+          "czq_comint_path=$(printf '%%s' \"$PATH\" | base64 | tr -d '\\n')\n"
+          "printf \"<%s handler=elisp>(czq-comint-completion-refresh "
+          "(base64-decode-string \\\"%%s\\\") 'process)</%s>\\n\" "
+          "\"$czq_comint_path\"\n")
+         tag tag)
+      (format
+       (concat
+        "czq_comint_path=$(printf '%%s' \"$PATH\" | sed -e 's/\\\\\\\\/\\\\\\\\\\\\\\\\/g' -e 's/\\\"/\\\\\\\"/g')\n"
+        "printf \"<%s handler=elisp>(czq-comint-completion-refresh "
+        "\\\"%%s\\\" 'process)</%s>\\n\" \"$czq_comint_path\"\n")
+       tag tag))))
+
 (defun czq-comint-completion-refresh-from-process (&optional buffer)
-  "Refresh command cache using the PATH reported by the REPL process for BUFFER.
-When called interactively, default to the current buffer."
+  "Request a command cache refresh using PATH reported by BUFFER's process.
+When called interactively, BUFFER defaults to the current buffer.  The refresh
+result arrives asynchronously via a CZQ tag emitted by the shell process.  The
+helper assumes the shell can invoke a `base64` command."
   (interactive)
   (let* ((buffer (or buffer (current-buffer)))
-        (process (get-buffer-process buffer)))
+         (process (get-buffer-process buffer)))
     (unless (and process (process-live-p process))
       (user-error "No live comint process in %s" (buffer-name buffer)))
-    (let* ((redirect-buffer (generate-new-buffer " *czq-comint-path*"))
-           (marker "__CZQ_PATH__=")
-           (command "printf '__CZQ_PATH__=%s\\n' \"$PATH\"\n"))
-      (unwind-protect
-          (progn
-            (with-current-buffer buffer
-              (setq comint-redirect-completed nil)
-              (comint-redirect-send-command-to-process command redirect-buffer process nil t))
-            (with-current-buffer redirect-buffer
-              (while (and (not comint-redirect-completed)
-                          (accept-process-output process 0.05)))
-              (goto-char (point-min))
-              (when (re-search-forward (concat marker "\\(.*\\)$") nil t)
-                (let ((path (match-string 1)))
-                  (with-current-buffer buffer
-                    (let* ((result (czq-comint-completion-refresh path))
-                           (commands (car result))
-                           (directories (cadr result)))
-                      (when (called-interactively-p 'any)
-                        (message "[czq-completion] scanned %d directories; cached %d commands (process)"
-                                 directories (length commands)))))))))
-        (kill-buffer redirect-buffer)))))
+    (let ((command (czq-comint-completion--process-refresh-command)))
+      (comint-send-string process command)
+      (when (called-interactively-p 'any)
+        (message "[czq-completion] requested PATH refresh from process")))))
 
 (defun czq-comint-completion--first-token-p (start)
   "Return non-nil if START is positioned at the first token in the line."
