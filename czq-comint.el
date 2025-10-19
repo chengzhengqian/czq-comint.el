@@ -21,6 +21,8 @@
 (require 'subr-x)
 (require 'comint)
 (require 'czq-xml-parser)
+(require 'czq-comint-dirtrack)
+(require 'czq-comint-completion)
 
 (defgroup czq-comint nil
   "Customized comint features for <czq-comint> tags."
@@ -64,6 +66,9 @@ body as a string and the remaining attribute alist."
 
 (defvar-local czq-comint--parser-state nil
   "Buffer-local parser state used by the comint output filter.")
+
+(defvar-local czq-comint-current-directory nil
+  "Buffer-local cache of the working directory tracked for the CZQ comint buffer.")
 
 (defun czq-comint--handle-elisp (body attrs)
   "Evaluate BODY as Emacs Lisp and optionally return printed results.
@@ -232,7 +237,12 @@ Recognises common true-ish string values such as \"true\", \"t\", \"yes\", and \
     (apply #'concat (nreverse pieces))))
 
 (defun czq-comint--preoutput-filter (output)
-  "Comint pre-output filter that processes CZQ structured tags in OUTPUT."
+  "Comint pre-output filter that processes CZQ structured tags in OUTPUT.
+
+The filter feeds OUTPUT through both the XML parser and the directory tracker,
+updating buffer-local state for downstream consumers such as completion."
+  (when output
+    (czq-comint-dirtrack-update output))
   (pcase-let* ((`(,state . ,tokens)
                 (czq-comint-parse-chunk czq-comint--parser-state output)))
     (setq czq-comint--parser-state state)
@@ -271,9 +281,22 @@ This mode is intended to understand <czq-comint ...>...</czq-comint>
 forms and expose helper commands to execute and navigate them.
 The core functionality is not implemented yet."
   (setq-local czq-comint--parser-state (czq-comint--make-parser-state))
+  (setq-local czq-comint-current-directory
+              (file-name-as-directory (expand-file-name default-directory)))
+  (czq-comint-completion-refresh)
+  (setq-local completion-at-point-functions
+              '(czq-comint-completion-at-point))
+  (setq-local comint-dynamic-complete-functions nil)
+  (local-set-key (kbd "TAB") #'completion-at-point)
+  (local-set-key (kbd "<tab>") #'completion-at-point)
+  (set (make-local-variable 'company-backends) '(company-capf))
+  (set (make-local-variable 'company-transformers) nil)
+  (set (make-local-variable 'company-occurrence-weight-function) nil)
+  (set (make-local-variable 'company-sort-by-occurrence) nil)
   (add-hook 'comint-preoutput-filter-functions
             #'czq-comint--preoutput-filter
-            nil t))
+            nil t)
+  )
 
 ;;;###autoload
 (defun czq-comint-run (buffer-name)
@@ -289,7 +312,8 @@ buffer starts a plain bash session."
                           czq-comint--buffer-name))))
   (unless (and buffer-name (stringp buffer-name) (not (string-empty-p buffer-name)))
     (user-error "BUFFER-NAME must be a non-empty string"))
-  (let* ((buffer (get-buffer-create buffer-name))
+  (let* ((origin-dir (file-name-as-directory (expand-file-name default-directory)))
+         (buffer (get-buffer-create buffer-name))
          (command (czq-comint--command-for-buffer buffer-name))
          (shell (or (executable-find "bash")
                     shell-file-name
@@ -298,16 +322,26 @@ buffer starts a plain bash session."
          (existing-proc (get-buffer-process buffer))
          (process existing-proc)
          (newly-started nil))
+    (with-current-buffer buffer
+      (setq default-directory origin-dir))
     (unless (and process (process-live-p process))
       (when (and process (not (process-live-p process)))
         (delete-process process))
-      (make-comint-in-buffer process-name buffer shell nil)
+      (let ((default-directory origin-dir))
+        (make-comint-in-buffer process-name buffer shell nil))
       (setq process (get-buffer-process buffer))
       (setq newly-started t))
     (with-current-buffer buffer
       (unless (derived-mode-p 'czq-comint-mode)
         (czq-comint-mode))
-      (setq-local czq-comint--buffer-name buffer-name))
+      (setq-local czq-comint--buffer-name buffer-name)
+      (setq-local czq-comint-current-directory origin-dir))
+    (when (processp process)
+      (let ((commands (if (file-remote-p origin-dir)
+                          "pwd\n"
+                        (format "cd %s\npwd\n"
+                                (shell-quote-argument origin-dir)))))
+        (comint-send-string process commands)))
     (when (and newly-started (processp process))
       (set-process-query-on-exit-flag process nil)
       (when (and command (not (string-empty-p command)))

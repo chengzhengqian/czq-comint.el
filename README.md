@@ -13,6 +13,11 @@ terminal flow.
   - `elisp` evaluates the body in a temporary buffer, optionally echoing
     results when `results="true"`.
   - `omit` discards the tag entirely.
+- Prompt-based directory tracking that mirrors the shell’s `pwd` and exposes
+  `czq-comint-dirtrack-display-current-directory` for quick inspection.
+- Completion backend seeded from both a customizable command list and the shell
+  process’ live `$PATH`; refresh interactively with
+  `czq-comint-completion-refresh-from-process`.
 - Debug logging via `czq-comint-debug` to trace handler resolution.
 - Buffer-aware startup commands through `czq-comint-command-alist`.
 - Helper script `scripts/czq-comint-emit-tag.sh` to emit sample tags for manual
@@ -49,7 +54,23 @@ pulls in both `czq-comint.el` and the XML parser.
 2. Run `M-x czq-comint-run` and supply a buffer name. If the name contains a
    key from `czq-comint-command-alist`, that command runs once bash is ready.
    Otherwise you get a plain bash prompt. The buffer is automatically put into
-   `czq-comint-mode`.
+   `czq-comint-mode`, starts in the directory from which you invoked
+   `czq-comint-run`, and immediately synchronises the shell with that `pwd`.
+
+3. Call `M-x czq-comint-dirtrack-display-current-directory` at any time to echo
+   the tracked working directory in the echo area—handy when shells emit ornate
+   prompts or when you want to double-check completion context.
+
+### Refresh PATH-aware completion
+
+- CZQ comint’s completion list combines `czq-comint-completion-command-list`
+  with executables discovered via the buffer’s `$PATH`.  On mode activation the
+  cache is seeded from Emacs’ own environment; run
+  `czq-comint-completion-refresh-from-process` after changing `$PATH` inside the
+  REPL to pull the live shell value.
+- After exporting a new path inside the REPL, run
+  `M-x czq-comint-completion-refresh-from-process` to rescan the shell and
+  update the cached candidates immediately.
 
 ### Emit structured tags
 
@@ -70,6 +91,13 @@ pulls in both `czq-comint.el` and the XML parser.
 Extend `czq-comint-handlers` with your own `(symbol . function)` pairs. Each
 function receives the tag body string and an alist of the remaining attributes.
 Return a string to insert into the buffer, or `nil`/`""` to suppress output.
+
+### Buffer-local state
+
+- `czq-comint-current-directory` — directory tracker cache synchronised with
+  the most recent shell prompt.
+- `czq-comint-completion--cached-commands` — merged command list used by the
+  completion backend; refreshed on mode start and on demand.
 
 ## Testing
 
