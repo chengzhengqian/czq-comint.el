@@ -12,7 +12,11 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'czq-comint)
+
+(defvar czq-comint--test-side-effect nil
+  "Helper variable used in CZQ comint tests.")
 
 (ert-deftest czq-comint-filter-text-pass-through ()
   "Plain text should flow through the filter unchanged."
@@ -20,6 +24,37 @@
     (czq-comint-mode)
     (should (equal (czq-comint--preoutput-filter "hello world\n")
                    "hello world\n"))))
+
+(ert-deftest czq-comint-filter-output-disabled ()
+  "When output is disabled the filter should suppress emitted text."
+  (let ((czq-comint--test-side-effect nil))
+    (with-temp-buffer
+      (czq-comint-mode)
+      (setq czq-comint-output-enabled nil)
+      (should (equal (czq-comint--preoutput-filter "hello world\n") ""))
+      (should (equal (czq-comint--preoutput-filter
+                      "<czq-comint handler=\"elisp\">(setq czq-comint--test-side-effect t)</czq-comint>")
+                     ""))
+      (should czq-comint--test-side-effect))))
+
+(ert-deftest czq-comint-edit-locals-updates-variable ()
+  "Interactive helper should allow editing CZQ comint buffer locals."
+  (with-temp-buffer
+    (czq-comint-mode)
+    (setq czq-comint-output-enabled t)
+    (cl-letf (((symbol-function 'with-help-window)
+               (lambda (_buffer &rest body)
+                 (apply #'progn body)))
+              ((symbol-function 'y-or-n-p)
+               (lambda (&rest _) t))
+              ((symbol-function 'completing-read)
+               (lambda (&rest _)
+                 "czq-comint-output-enabled"))
+              ((symbol-function 'read-from-minibuffer)
+               (lambda (&rest _)
+                 nil)))
+      (czq-comint-edit-locals)
+      (should-not czq-comint-output-enabled))))
 
 (ert-deftest czq-comint-filter-elisp-handler ()
   "The default `elisp' handler evaluates body forms but suppresses output."

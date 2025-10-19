@@ -70,6 +70,9 @@ body as a string and the remaining attribute alist."
 (defvar-local czq-comint-current-directory nil
   "Buffer-local cache of the working directory tracked for the CZQ comint buffer.")
 
+(defvar-local czq-comint-output-enabled t
+  "When non-nil, emit text produced by the CZQ comint pre-output filter.")
+
 (defun czq-comint--handle-elisp (body attrs)
   "Evaluate BODY as Emacs Lisp and optionally return printed results.
 
@@ -249,7 +252,55 @@ updating buffer-local state for downstream consumers such as completion."
   (pcase-let* ((`(,state . ,tokens)
                 (czq-comint-parse-chunk czq-comint--parser-state output)))
     (setq czq-comint--parser-state state)
-    (czq-comint--accumulate-output tokens)))
+    (let ((rendered (czq-comint--accumulate-output tokens)))
+      (if czq-comint-output-enabled
+          rendered
+        ""))))
+
+(defun czq-comint--local-czq-variables ()
+  "Return a sorted list of CZQ comint-specific buffer-local variables."
+  (let ((symbols '()))
+    (dolist (entry (buffer-local-variables))
+      (let ((sym (car entry)))
+        (when (and (symbolp sym)
+                   (string-prefix-p "czq-comint" (symbol-name sym)))
+          (push sym symbols))))
+    (setq symbols (delete-dups symbols))
+    (sort symbols (lambda (a b)
+                    (string-lessp (symbol-name a) (symbol-name b))))))
+
+;;;###autoload
+(defun czq-comint-edit-locals (&optional buffer)
+  "Display and optionally edit CZQ comint buffer-local variables for BUFFER.
+When called interactively, operate on the current buffer."
+  (interactive)
+  (let ((buffer (or buffer (current-buffer))))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'czq-comint-mode)
+        (user-error "Not in a czq-comint buffer"))
+      (let ((locals (czq-comint--local-czq-variables)))
+        (with-help-window "*CZQ Comint Locals*"
+          (princ (format "CZQ comint locals for %s\n\n" (buffer-name)))
+          (if locals
+              (dolist (sym locals)
+                (princ (format "%-32s %S\n" sym (buffer-local-value sym buffer))))
+            (princ "No CZQ comint-specific locals found.\n")))
+        (when (and locals (y-or-n-p "Edit a CZQ comint local variable? "))
+          (let* ((name (completing-read
+                        "Variable: "
+                        (mapcar #'symbol-name locals)
+                        nil t nil nil (symbol-name (car locals))))
+                 (symbol (intern name))
+                 (current (buffer-local-value symbol buffer))
+                 (prompt (format "Set %s (current %S): " name current))
+                 (new-value (read-from-minibuffer
+                             prompt
+                             (prin1-to-string current)
+                             read-expression-map
+                             t
+                             'read-expression-history)))
+            (set symbol new-value)
+            (message "Set %s to %S" name (symbol-value symbol))))))))
 
 (defvar czq-comint--buffer-name "*CZQ Comint*"
   "Name of the buffer used for CZQ comint interactions.")
@@ -286,6 +337,7 @@ The core functionality is not implemented yet."
   (setq-local czq-comint--parser-state (czq-comint--make-parser-state))
   (setq-local czq-comint-current-directory
               (file-name-as-directory (expand-file-name default-directory)))
+  (setq-local czq-comint-output-enabled t)
   (czq-comint-completion-refresh)
   (setq-local completion-at-point-functions
               '(czq-comint-completion-at-point))

@@ -85,6 +85,9 @@ pulls in both `czq-comint.el` and the XML parser.
 - Toggle `czq-comint-completion-debug` (or call
   `czq-comint-completion-toggle-debug`) to log whether the backend is offering
   command or file candidates.
+- Inspect or tweak buffer-local settings (such as `czq-comint-output-enabled`
+  or `czq-comint-completion-use-base64`) with `M-x czq-comint-edit-locals`,
+  which shows current values and prompts for updates.
 
 ### Emit structured tags
 
@@ -112,6 +115,9 @@ Return a string to insert into the buffer, or `nil`/`""` to suppress output.
   the most recent shell prompt.
 - `czq-comint-completion--cached-commands` — merged command list used by the
   completion backend; refreshed on mode start and on demand.
+- `czq-comint-output-enabled` — when non-nil the pre-output filter inserts
+  text; set it to nil to temporarily silence buffer output while still letting
+  handlers run.
 
 ## Testing
 
