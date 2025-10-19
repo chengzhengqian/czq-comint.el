@@ -92,7 +92,12 @@ mode starts, but you can ask the running shell for its live `$PATH` at any time:
 
 This is particularly handy after running `export PATH=…` within the REPL.  The
 command redirects a `printf` into the process, parses the resulting path, and
-refreshes the cached completion candidates in place.
+refreshes the cached completion candidates in place.  File suggestions are
+drawn directly from `czq-comint-current-directory`, so the completion menu stays
+aligned with the prompt tracker.  Enable
+`czq-comint-completion-debug` (or call
+`czq-comint-completion-toggle-debug`) to log whether completions are sourced
+from commands or files while inspecting behaviour.
 
 Buffer-local helpers you may want to inspect during development:
 

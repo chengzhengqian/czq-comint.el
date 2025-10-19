@@ -64,10 +64,17 @@ pulls in both `czq-comint.el` and the XML parser.
 ### Refresh PATH-aware completion
 
 - CZQ comint’s completion list combines `czq-comint-completion-command-list`
-  with executables discovered via the buffer’s `$PATH`.  On mode activation the
-  cache is seeded from Emacs’ own environment; run
-  `czq-comint-completion-refresh-from-process` after changing `$PATH` inside the
-  REPL to pull the live shell value.
+  with executables discovered via the buffer’s `$PATH` and file names from the
+  tracked working directory.  On mode activation the cache is seeded from
+  Emacs’ own environment; run `czq-comint-completion-refresh-from-process`
+  after changing `$PATH` inside the REPL to pull the live shell value.
+- File suggestions follow `czq-comint-current-directory`, so completions stay in
+  sync with whatever the directory tracker reports.
+- Toggle `czq-comint-completion-debug` (or call
+  `czq-comint-completion-toggle-debug`) to log whether the backend is offering
+  command or file candidates.
+- File suggestions follow `czq-comint-current-directory`, so completions stay in
+  sync with whatever the directory tracker reports.
 - After exporting a new path inside the REPL, run
   `M-x czq-comint-completion-refresh-from-process` to rescan the shell and
   update the cached candidates immediately.
