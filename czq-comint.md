@@ -104,11 +104,20 @@ Internally the refresh uses `czq-comint--send-command-quietly` to momentarily
 disable buffer output while the helper command runs.  The same utility is used
 when `czq-comint-run` issues the initial `cd`, ensuring the inevitable prompt
 that bash prints in response never appears in the buffer.  The helper emits a
-small `<czq-comint …>` tag that restores `czq-comint-output-enabled` once the
-shell has finished responding.  Pass a *skip* count when the command is expected
-to echo additional plain-text output (for example, `pwd` plus a prompt).  You
-can reuse the helper whenever you need to send setup commands without flashing
-extra prompts.
+small `<czq-comint …>` tag—printed with `printf '%s\n' …` so shell quoting is
+handled for you—that restores `czq-comint-output-enabled` once the shell has
+finished responding.  Pass a *skip* count when the command is expected to echo
+additional plain-text output (for example, `pwd` plus a prompt).  You can reuse
+the helper whenever you need to send setup commands without flashing extra
+prompts:
+
+```elisp
+(let ((proc (get-buffer-process (current-buffer))))
+  (czq-comint--send-command-quietly proc "source env/bin/activate" 1))
+```
+
+The final argument above suppresses the activation prompt after the shell prints
+it; the restore tag takes care of re-enabling output immediately afterwards.
 
 When the cache is refreshed from inside Emacs (for example during mode
 initialisation or by calling `czq-comint-completion-refresh` manually) the code

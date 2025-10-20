@@ -77,9 +77,11 @@ pulls in both `czq-comint.el` and the XML parser.
   `M-x czq-comint-completion-refresh-from-process`.  By default the helper
   prints a `<czq-comint>` tag whose body embeds the live `$PATH` with only
   backslashes and double quotes escaped, so the `elisp` handler can call
-  `czq-comint-completion-refresh` with the literal string.  Wait for the
-  `[czq-completion] scanned … (process)` message before expecting new command
-  candidates.
+  `czq-comint-completion-refresh` with the literal string.  Output is
+  temporarily disabled while the command runs; the helper immediately prints a
+  second tag via `printf '%s\n' …` to restore `czq-comint-output-enabled`
+  once the shell finishes responding.  Wait for the `[czq-completion] scanned …
+  (process)` message before expecting new command candidates.
 - If the shell environment contains tricky characters, enable the optional
   base64 transport: set the buffer-local
   `czq-comint-completion-use-base64` (or call
@@ -94,6 +96,19 @@ pulls in both `czq-comint.el` and the XML parser.
 - Inspect or tweak buffer-local settings (such as `czq-comint-output-enabled`
   or `czq-comint-completion-use-base64`) with `M-x czq-comint-edit-locals`,
   which shows current values and prompts for updates.
+
+### Silent REPL helpers
+
+- Use `czq-comint--send-command-quietly` when you need to run setup commands
+  without flashing prompts or echoed text.  The helper disables buffer output,
+  sends the command (adding a trailing newline if necessary), and queues a
+  `<czq-comint handler=elisp>` restore tag that re-enables output and skips the
+  prompt line once the shell is done.  Passing a numeric `skip-strings` count
+  suppresses additional plain-text tokens that you know the command will emit.
+- `czq-comint-run` calls the helper automatically to align a new shell with the
+  invoking `default-directory`.  You can reuse it from other code—for example,
+  to `source` a virtualenv or trigger a PATH refresh—without leaving stray
+  prompts in the buffer.
 
 ### Emit structured tags
 
