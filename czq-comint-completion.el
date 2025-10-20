@@ -20,6 +20,8 @@
 (require 'comint)
 
 (defvar czq-comint-tag-name)
+(declare-function czq-comint--send-command-quietly "czq-comint"
+                  (process command &optional skip-strings))
 
 (defgroup czq-comint-completion nil
   "Completion helpers for `czq-comint-mode'."
@@ -165,11 +167,10 @@ helper assumes the shell can invoke a `base64` command."
          (process (get-buffer-process buffer)))
     (unless (and process (process-live-p process))
       (user-error "No live comint process in %s" (buffer-name buffer)))
-    (setq czq-comint-output-enabled nil)
     (let ((command (czq-comint-completion--process-refresh-command)))
-      (comint-send-string process command)
-      (when (called-interactively-p 'any)
-        (message "[czq-completion] requested PATH refresh from process")))))
+      (czq-comint--send-command-quietly process command))
+    (when (called-interactively-p 'any)
+      (message "[czq-completion] requested PATH refresh from process"))))
 
 (defun czq-comint-completion--first-token-p (start)
   "Return non-nil if START is positioned at the first token in the line."

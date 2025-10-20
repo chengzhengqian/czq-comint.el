@@ -100,6 +100,16 @@ through normal process output it is asynchronous—wait for that message before
 expecting new candidates.  If you switch to base64 mode, make sure the shell
 offers a `base64` utility (common on POSIX installations).
 
+Internally the refresh uses `czq-comint--send-command-quietly` to momentarily
+disable buffer output while the helper command runs.  The same utility is used
+when `czq-comint-run` issues the initial `cd`, ensuring the inevitable prompt
+that bash prints in response never appears in the buffer.  The helper emits a
+small `<czq-comint …>` tag that restores `czq-comint-output-enabled` once the
+shell has finished responding.  Pass a *skip* count when the command is expected
+to echo additional plain-text output (for example, `pwd` plus a prompt).  You
+can reuse the helper whenever you need to send setup commands without flashing
+extra prompts.
+
 When the cache is refreshed from inside Emacs (for example during mode
 initialisation or by calling `czq-comint-completion-refresh` manually) the code
 operates on the raw `$PATH` string from the current environment; no encoding is

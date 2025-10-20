@@ -18,6 +18,11 @@ terminal flow.
 - Completion backend seeded from both a customizable command list and the shell
   process’ live `$PATH`; refresh interactively with
   `czq-comint-completion-refresh-from-process`.
+- Quiet command helper (`czq-comint--send-command-quietly`) that synchronises
+  the shell without flashing extra prompts—used by `czq-comint-run` and the
+  PATH refresh logic.  It temporarily disables buffer output, issues the
+  command, and restores output via an inline elisp tag once the shell has
+  finished responding.
 - Debug logging via `czq-comint-debug` to trace handler resolution.
 - Buffer-aware startup commands through `czq-comint-command-alist`.
 - Helper script `scripts/czq-comint-emit-tag.sh` to emit sample tags for manual
@@ -55,7 +60,8 @@ pulls in both `czq-comint.el` and the XML parser.
    key from `czq-comint-command-alist`, that command runs once bash is ready.
    Otherwise you get a plain bash prompt. The buffer is automatically put into
    `czq-comint-mode`, starts in the directory from which you invoked
-   `czq-comint-run`, and immediately synchronises the shell with that `pwd`.
+   `czq-comint-run`, and immediately synchronises the shell with that `pwd`
+   via `czq-comint--send-command-quietly`, so you do not see duplicate prompts.
 
 3. Call `M-x czq-comint-dirtrack-display-current-directory` at any time to echo
    the tracked working directory in the echo area—handy when shells emit ornate
