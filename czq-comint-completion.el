@@ -134,27 +134,25 @@ outside that path should pass plain text."
       (car (czq-comint-completion-refresh))))
 
 (defun czq-comint-completion--process-refresh-command ()
-  "Return shell source that emits a refresh tag with the current PATH.
+  "Return shell source that emits refresh tags with the current PATH.
 
 When `czq-comint-completion-use-base64' is non-nil the helper base64-encodes
 the value so we can embed it into the tag body without worrying about shell
 quoting.  Otherwise the command escapes backslashes and double quotes directly
 so Emacs can consume the literal string.  In the encoded case,
-`czq-comint-completion-refresh' receives a decoded string."
+`czq-comint-completion-refresh' receives a decoded string.  A second tag always
+sets `czq-comint-output-enabled' back to t."
   (let* ((tag (or czq-comint-tag-name "czq-comint")))
     (if czq-comint-completion-use-base64
         (format
          (concat
           "czq_comint_path=$(printf '%%s' \"$PATH\" | base64 | tr -d '\\n')\n"
-          "printf \"<%s handler=elisp>(czq-comint-completion-refresh "
-          "(base64-decode-string \\\"%%s\\\") 'process)</%s>\\n\" "
-          "\"$czq_comint_path\"\n")
+          "printf \"<%s handler=elisp>(czq-comint-completion-refresh (base64-decode-string \\\"%%s\\\") 'process)</%s>\\n\" \"$czq_comint_path\"\n")
          tag tag)
       (format
        (concat
         "czq_comint_path=$(printf '%%s' \"$PATH\" | sed -e 's/\\\\\\\\/\\\\\\\\\\\\\\\\/g' -e 's/\\\"/\\\\\\\"/g')\n"
-        "printf \"<%s handler=elisp>(czq-comint-completion-refresh "
-        "\\\"%%s\\\" 'process)</%s>\\n\" \"$czq_comint_path\"\n")
+        "printf \"<%s handler=elisp>(czq-comint-completion-refresh \\\"%%s\\\" 'process)</%s>\\n\" \"$czq_comint_path\"\n")
        tag tag))))
 
 (defun czq-comint-completion-refresh-from-process (&optional buffer)
@@ -167,6 +165,7 @@ helper assumes the shell can invoke a `base64` command."
          (process (get-buffer-process buffer)))
     (unless (and process (process-live-p process))
       (user-error "No live comint process in %s" (buffer-name buffer)))
+    (setq czq-comint-output-enabled nil)
     (let ((command (czq-comint-completion--process-refresh-command)))
       (comint-send-string process command)
       (when (called-interactively-p 'any)
