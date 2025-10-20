@@ -114,7 +114,8 @@ pulls in both `czq-comint.el` and the XML parser.
 
 - Send output such as `<czq-comint handler="elisp">(+ 1 2)</czq-comint>` from
   the process. The parser accumulates partial chunks until the tag closes.
-- Toggle `czq-comint-debug` to `t` to watch dispatch decisions in `*Messages*`.
+- Toggle debug logging with `M-x czq-comint-toggle-debug` (or set
+  `czq-comint-debug` non-nil) to watch dispatch decisions in `*Messages*`.
 - Use the provided script for quick manual testing:
 
   ```sh

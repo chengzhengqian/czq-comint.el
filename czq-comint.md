@@ -6,10 +6,11 @@ workflow you can run inside `*scratch*` while developing.
 
 ## Quick Setup
 - Ensure both `czq-xml-parser.el` and `czq-comint.el` are loaded: `(require 'czq-comint)`.
-- Optional: enable debug logging to watch handler dispatch decisions.
+- Optional: enable debug logging to watch handler dispatch decisions.  Toggle
+  it interactively (`M-x czq-comint-toggle-debug`) or from Lisp:
 
 ```elisp
-(setq czq-comint-debug t)
+(czq-comint-toggle-debug 1) ; new state reported in the echo area
 ```
 
 ## Scratch Snippets

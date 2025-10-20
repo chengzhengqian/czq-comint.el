@@ -40,6 +40,23 @@
   :type 'boolean
   :group 'czq-comint)
 
+;;;###autoload
+(defun czq-comint-toggle-debug (&optional arg)
+  "Toggle `czq-comint-debug'.
+
+With optional ARG, enable debug logging when ARG is positive,
+disable it when ARG is zero or negative.  When ARG is `toggle' or
+nil, flip the current state.  Return the new value."
+  (interactive (list (or current-prefix-arg 'toggle)))
+  (let* ((previous czq-comint-debug)
+         (new (cond
+               ((memq arg '(toggle nil)) (not previous))
+               ((> (prefix-numeric-value arg) 0) t)
+               (t nil))))
+    (setq czq-comint-debug new)
+    (message "czq-comint-debug %s" (if new "enabled" "disabled"))
+    new))
+
 (defconst czq-comint--default-handlers
   '((elisp . czq-comint--handle-elisp)
     (omit . czq-comint--handle-omit))
