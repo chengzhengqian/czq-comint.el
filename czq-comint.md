@@ -101,24 +101,42 @@ through normal process output it is asynchronous—wait for that message before
 expecting new candidates.  If you switch to base64 mode, make sure the shell
 offers a `base64` utility (common on POSIX installations).
 
-Internally the refresh uses `czq-comint--send-command-quietly` to momentarily
-disable buffer output while the helper command runs.  The same utility is used
-when `czq-comint-run` issues the initial `cd`, ensuring the inevitable prompt
-that bash prints in response never appears in the buffer.  The helper emits a
-small `<czq-comint …>` tag—printed with `printf '%s\n' …` so shell quoting is
-handled for you—that restores `czq-comint-output-enabled` once the shell has
-finished responding.  Pass a *skip* count when the command is expected to echo
-additional plain-text output (for example, `pwd` plus a prompt).  You can reuse
+Internally the refresh uses `czq-comint--send-command-quietly` to install a
+render filter while the helper command runs.  The same utility is used when
+`czq-comint-run` issues the initial `cd`, ensuring the inevitable prompt that
+bash prints in response never appears in the buffer.  The helper emits a small
+`<czq-comint …>` tag—printed with `printf '%s\n' …` so shell quoting is handled
+for you—that calls `czq-comint-send--complete-quiet` once the shell has finished
+responding.  The tag schedules a short timer (controlled by
+`czq-comint-send-quiet-teardown-delay`) so the render filter remains in place
+long enough to swallow the following prompt.  Pass an optional numeric argument
+to `czq-comint--send-command-quietly` when you need to stretch the quiet window;
+each increment adds `czq-comint-send-quiet-extra-delay` seconds before the
+filter is removed.  You can reuse
 the helper whenever you need to send setup commands without flashing extra
 prompts:
 
 ```elisp
-(let ((proc (get-buffer-process (current-buffer))))
   (czq-comint--send-command-quietly proc "source env/bin/activate" 1))
 ```
 
-The final argument above suppresses the activation prompt after the shell prints
-it; the restore tag takes care of re-enabling output immediately afterwards.
+The final argument above keeps the render filter active a little longer so the
+activation prompt is still suppressed even if it arrives slightly after the
+restore tag.
+
+Both delay variables are buffer-local.  Set them directly when experimenting:
+
+```elisp
+(setq-local czq-comint-send-quiet-teardown-delay 5.0)
+(setq-local czq-comint-send-quiet-extra-delay 0.2)
+```
+
+The first example keeps the quiet window open for five seconds; the second lets
+each numeric increment extend the window by 0.2 seconds.
+
+Prefer `M-x czq-comint-send-edit-quiet-delays` for an interactive workflow—the
+command displays the current values and prompts for new ones (press RET to keep
+the existing setting), making the results buffer-local automatically.
 
 When the cache is refreshed from inside Emacs (for example during mode
 initialisation or by calling `czq-comint-completion-refresh` manually) the code
@@ -162,6 +180,7 @@ Run both parser and comint filter tests together:
 ```sh
 emacs --batch -L . \
   -l czq-xml-parser-tests.el \
+  -l czq-comint-send-tests.el \
   -l czq-comint-tests.el \
   -f ert-run-tests-batch-and-exit
 ```

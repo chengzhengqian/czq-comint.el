@@ -25,6 +25,11 @@
 (require 'czq-comint-dirtrack)
 (require 'czq-comint-completion)
 
+(declare-function czq-comint-send--apply-render-filters "czq-comint-send" (chunk))
+
+(autoload 'czq-comint--send-command-quietly "czq-comint-send"
+  "Send COMMAND to PROCESS while suppressing CZQ comint buffer output." nil)
+
 (defgroup czq-comint nil
   "Customized comint features for <czq-comint> tags."
   :prefix "czq-comint-"
@@ -91,9 +96,6 @@ body as a string and the remaining attribute alist."
 (defvar-local czq-comint-output-enabled t
   "When non-nil, emit text produced by the CZQ comint pre-output filter.")
 
-(defvar-local czq-comint--skip-string-count 0
-  "Number of upcoming plain string tokens to drop from the pre-output filter.")
-
 (defun czq-comint--handle-elisp (body attrs)
   "Evaluate BODY as Emacs Lisp and optionally return printed results.
 
@@ -144,39 +146,38 @@ LIMIT defaults to 120 characters."
          (raw (if (stringp value)
                   (replace-regexp-in-string "\n" "\\\\n" value)
                 (prin1-to-string value)))
-         (result (if (> (length raw) limit)
-                     (concat (substring raw 0 limit) "…")
-                   raw)))
-    result))
+         (len (length raw)))
+    (if (<= len limit)
+        raw
+      (let* ((keep (max 4 (/ (max 1 (- limit 3)) 2)))
+             (prefix (substring raw 0 keep))
+             (suffix (substring raw (- len keep))))
+        (format "%s…%s" prefix suffix)))))
 
-(defun czq-comint--send-command-quietly (process command &optional skip-strings)
-  "Send COMMAND to PROCESS while temporarily suppressing buffer output.
+(defun czq-comint--debug-summarize-token (token)
+  "Return a compact representation for TOKEN used in debug logging."
+  (cond
+   ((stringp token)
+    (format "\"%s\"" (czq-comint--debug-summarize token 80)))
+   ((and (consp token) (consp (car token)))
+    (let* ((attrs (car token))
+           (body (cdr token))
+           (handler (cdr (assoc "handler" attrs))))
+      (format "<tag handler=%s attrs=%s body=%s>"
+              (czq-comint--debug-summarize handler 40)
+              (czq-comint--debug-summarize attrs 40)
+              (czq-comint--debug-summarize body 80))))
+   (t (czq-comint--debug-summarize token 80))))
 
-COMMAND is ensured to end with a newline.  SKIP-STRINGS, when non-nil,
-adds additional plain-string tokens to skip beyond the automatic prompt that
-is suppressed after output is re-enabled.  Use this when the command is known
-to echo extra prompts or other plain text you would like to hide."
-  (unless (and process (process-live-p process))
-    (user-error "Process is not live"))
-  (when (and command (> (length command) 0))
-    (let* ((tag (or czq-comint-tag-name "czq-comint"))
-           (original czq-comint-output-enabled)
-           (payload (if (string-suffix-p "\n" command)
-                        command
-                      (concat command "\n")))
-           (restore-tag (format "<%s handler=elisp>(setq czq-comint-output-enabled t)</%s>"
-                                tag tag))
-           (restore (and original
-                         (format "printf '%%s\\n' %s\n"
-                                 (shell-quote-argument restore-tag))))
-           (extra (max 0 (or skip-strings 0))))
-      (setq czq-comint-output-enabled nil)
-      (setq czq-comint--skip-string-count
-            (+ czq-comint--skip-string-count 1 extra))
-      (comint-send-string process
-                          (if restore
-                              (concat payload restore)
-                            payload)))))
+(defun czq-comint--debug-format-tokens (tokens)
+  "Return an indexed summary string for TOKENS."
+  (let ((index 0)
+        (pieces '()))
+    (dolist (token tokens)
+      (setq index (1+ index))
+      (push (format "%d:%s" index (czq-comint--debug-summarize-token token))
+            pieces))
+    (mapconcat #'identity (nreverse pieces) " ")))
 
 (defun czq-comint--normalize-handler-name (name)
   "Convert NAME from attribute form to the symbol used in handler tables."
@@ -290,21 +291,13 @@ Recognises common true-ish string values such as \"true\", \"t\", \"yes\", and \
       (let* ((symbol (car handler-entry))
              (fn (cdr handler-entry)))
         (czq-comint--debug "Dispatching handler %S with attrs %S" symbol remaining)
-        (let ((previous-output czq-comint-output-enabled))
-          (condition-case err
-              (let ((result (czq-comint--normalize-handler-result
-                             (funcall fn body remaining))))
-                (when (and (not previous-output) czq-comint-output-enabled)
-                  (setq czq-comint--skip-string-count
-                        (1+ czq-comint--skip-string-count))
-                  (when czq-comint-debug
-                    (czq-comint--debug "%s scheduling skip of next string token"
-                                       (czq-comint--debug-timestamp))))
-                result)
-            (error
-             (czq-comint--debug "Handler %S error: %s" symbol (error-message-string err))
-             (format "[czq-comint handler %S error] %s"
-                     symbol (error-message-string err)))))))))
+        (condition-case err
+            (czq-comint--normalize-handler-result
+             (funcall fn body remaining))
+          (error
+           (czq-comint--debug "Handler %S error: %s" symbol (error-message-string err))
+           (format "[czq-comint handler %S error] %s"
+                   symbol (error-message-string err))))))))
 
 (defun czq-comint--accumulate-output (tokens)
   "Convert TOKENS from the parser into a single output string."
@@ -312,24 +305,17 @@ Recognises common true-ish string values such as \"true\", \"t\", \"yes\", and \
     (dolist (token tokens)
       (cond
        ((stringp token)
-        (cond
-         ((> czq-comint--skip-string-count 0)
-          (cl-decf czq-comint--skip-string-count)
-          (when czq-comint-debug
-            (czq-comint--debug "%s skipping string due to pending skip: %s"
-                               (czq-comint--debug-timestamp)
-                               (czq-comint--debug-summarize token))))
-         (czq-comint-output-enabled
-          (when czq-comint-debug
-            (czq-comint--debug "%s emitting string token: %s"
-                               (czq-comint--debug-timestamp)
-                               (czq-comint--debug-summarize token)))
-          (push token pieces))
-         (t
+        (if czq-comint-output-enabled
+            (progn
+              (when czq-comint-debug
+                (czq-comint--debug "%s emitting string token: %s"
+                                   (czq-comint--debug-timestamp)
+                                   (czq-comint--debug-summarize token)))
+              (push token pieces))
           (when czq-comint-debug
             (czq-comint--debug "%s skipping string while output disabled: %s"
                                (czq-comint--debug-timestamp)
-                               (czq-comint--debug-summarize token))))))
+                               (czq-comint--debug-summarize token)))))
        (t
         (push (czq-comint--dispatch-tag token) pieces))))
     (apply #'concat (nreverse pieces))))
@@ -345,7 +331,7 @@ updating buffer-local state for downstream consumers such as completion."
                          timestamp
                          (if output (length output) 0)
                          czq-comint-output-enabled
-                         (czq-comint--debug-summarize (or output "")))))
+                         (czq-comint--debug-summarize (or output "") 160))))
   (when output
     (czq-comint-dirtrack-update output))
   (pcase-let* ((`(,state . ,tokens)
@@ -355,18 +341,21 @@ updating buffer-local state for downstream consumers such as completion."
         (czq-comint--debug "%s tokens (count=%d) %s"
                            timestamp
                            (length tokens)
-                           (czq-comint--debug-summarize tokens))))
+                           (czq-comint--debug-format-tokens tokens))))
     (setq czq-comint--parser-state state)
-    (let ((rendered (czq-comint--accumulate-output tokens)))
+    (let* ((rendered (czq-comint--accumulate-output tokens))
+           (filtered (if (fboundp 'czq-comint-send--apply-render-filters)
+                         (czq-comint-send--apply-render-filters rendered)
+                       rendered)))
       (let ((suppressed (not czq-comint-output-enabled)))
         (when czq-comint-debug
           (let ((timestamp (czq-comint--debug-timestamp)))
             (czq-comint--debug "%s rendered (len=%d, suppressed=%s) chunk=%s"
                                timestamp
-                               (length rendered)
+                               (length filtered)
                                suppressed
-                               (czq-comint--debug-summarize rendered))))
-        (if suppressed "" rendered)))))
+                               (czq-comint--debug-summarize filtered))))
+        (if suppressed "" filtered)))))
 
 (defun czq-comint--local-czq-variables ()
   "Return a sorted list of CZQ comint-specific buffer-local variables."
@@ -449,7 +438,6 @@ The core functionality is not implemented yet."
   (setq-local czq-comint-current-directory
               (file-name-as-directory (expand-file-name default-directory)))
   (setq-local czq-comint-output-enabled t)
-  (setq-local czq-comint--skip-string-count 0)
   (czq-comint-completion-refresh)
   (setq-local completion-at-point-functions
               '(czq-comint-completion-at-point))

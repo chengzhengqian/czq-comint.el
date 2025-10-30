@@ -20,9 +20,9 @@ terminal flow.
   `czq-comint-completion-refresh-from-process`.
 - Quiet command helper (`czq-comint--send-command-quietly`) that synchronises
   the shell without flashing extra prompts—used by `czq-comint-run` and the
-  PATH refresh logic.  It temporarily disables buffer output, issues the
-  command, and restores output via an inline elisp tag once the shell has
-  finished responding.
+  PATH refresh logic.  It installs a render filter that discards intermediate
+  output, issues the command, and appends an inline elisp tag that tears down
+  the filter once the shell has finished responding.
 - Debug logging via `czq-comint-debug` to trace handler resolution.
 - Buffer-aware startup commands through `czq-comint-command-alist`.
 - Helper script `scripts/czq-comint-emit-tag.sh` to emit sample tags for manual
@@ -78,10 +78,11 @@ pulls in both `czq-comint.el` and the XML parser.
   prints a `<czq-comint>` tag whose body embeds the live `$PATH` with only
   backslashes and double quotes escaped, so the `elisp` handler can call
   `czq-comint-completion-refresh` with the literal string.  Output is
-  temporarily disabled while the command runs; the helper immediately prints a
-  second tag via `printf '%s\n' …` to restore `czq-comint-output-enabled`
-  once the shell finishes responding.  Wait for the `[czq-completion] scanned …
-  (process)` message before expecting new command candidates.
+  temporarily silenced via the render filter while the command runs; the helper
+  immediately prints a second tag via `printf '%s\n' …` to call
+  `czq-comint-send--complete-quiet` once the shell finishes responding.  Wait
+  for the `[czq-completion] scanned … (process)` message before expecting new
+  command candidates.
 - If the shell environment contains tricky characters, enable the optional
   base64 transport: set the buffer-local
   `czq-comint-completion-use-base64` (or call
@@ -100,11 +101,18 @@ pulls in both `czq-comint.el` and the XML parser.
 ### Silent REPL helpers
 
 - Use `czq-comint--send-command-quietly` when you need to run setup commands
-  without flashing prompts or echoed text.  The helper disables buffer output,
-  sends the command (adding a trailing newline if necessary), and queues a
-  `<czq-comint handler=elisp>` restore tag that re-enables output and skips the
-  prompt line once the shell is done.  Passing a numeric `skip-strings` count
-  suppresses additional plain-text tokens that you know the command will emit.
+  without flashing prompts or echoed text.  The helper installs a render filter
+  that discards process output, sends the command (adding a trailing newline if
+  necessary), and queues a `<czq-comint handler=elisp>` restore tag that calls
+  `czq-comint-send--complete-quiet` to remove the filter after a short timer.
+  Tweak `czq-comint-send-quiet-teardown-delay` (and the optional
+  `czq-comint-send-quiet-extra-delay` increments via the helper’s third
+  argument) to control how long the quiet window lasts before prompts
+  reappear—for example,
+  `(setq-local czq-comint-send-quiet-teardown-delay 5.0)` keeps the filter in
+  place for five seconds in the current buffer.
+- Use `czq-comint-send-edit-quiet-delays` to inspect or update those delay
+  values interactively in any `czq-comint-mode` buffer.
 - `czq-comint-run` calls the helper automatically to align a new shell with the
   invoking `default-directory`.  You can reuse it from other code—for example,
   to `source` a virtualenv or trigger a PATH refresh—without leaving stray
@@ -148,6 +156,7 @@ Run the automated suite to verify both the parser and the handler dispatcher:
 ```sh
 emacs --batch -L . \
   -l czq-xml-parser-tests.el \
+  -l czq-comint-send-tests.el \
   -l czq-comint-tests.el \
   -f ert-run-tests-batch-and-exit
 ```
