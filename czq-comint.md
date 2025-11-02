@@ -108,35 +108,33 @@ bash prints in response never appears in the buffer.  The helper emits a small
 `<czq-comint …>` tag—printed with `printf '%s\n' …` so shell quoting is handled
 for you—that calls `czq-comint-send--complete-quiet` once the shell has finished
 responding.  The tag schedules a short timer (controlled by
-`czq-comint-send-quiet-teardown-delay`) so the render filter remains in place
-long enough to swallow the following prompt.  Pass an optional numeric argument
-to `czq-comint--send-command-quietly` when you need to stretch the quiet window;
-each increment adds `czq-comint-send-quiet-extra-delay` seconds before the
-filter is removed.  You can reuse
+`czq-comint-send-quiet-delay`) so the render filter remains in place long
+enough to swallow the following prompt.  Pass an optional numeric argument
+to `czq-comint--send-command-quietly` when you need to stretch (or shorten)
+the quiet window; treat the argument as the number of seconds to wait before
+the filter is removed.  You can reuse
 the helper whenever you need to send setup commands without flashing extra
 prompts:
 
 ```elisp
-  (czq-comint--send-command-quietly proc "source env/bin/activate" 1))
+  (czq-comint--send-command-quietly proc "source env/bin/activate" 1.0))
 ```
 
-The final argument above keeps the render filter active a little longer so the
+The final argument above keeps the render filter active for one second so the
 activation prompt is still suppressed even if it arrives slightly after the
 restore tag.
 
-Both delay variables are buffer-local.  Set them directly when experimenting:
+The quiet delay is buffer-local.  Set it directly when experimenting:
 
 ```elisp
-(setq-local czq-comint-send-quiet-teardown-delay 5.0)
-(setq-local czq-comint-send-quiet-extra-delay 0.2)
+(setq-local czq-comint-send-quiet-delay 5.0)
 ```
 
-The first example keeps the quiet window open for five seconds; the second lets
-each numeric increment extend the window by 0.2 seconds.
+The example keeps the quiet window open for five seconds by default.
 
 Prefer `M-x czq-comint-send-edit-quiet-delays` for an interactive workflow—the
-command displays the current values and prompts for new ones (press RET to keep
-the existing setting), making the results buffer-local automatically.
+command displays the current value and prompts for a new one (press RET to keep
+the existing setting), making the result buffer-local automatically.
 
 When the cache is refreshed from inside Emacs (for example during mode
 initialisation or by calling `czq-comint-completion-refresh` manually) the code

@@ -1,141 +1,141 @@
 # CZQ Comint Send Helpers
 
-_Path_: `czq-comint-send.md`
+`czq-comint-send.el` concentrates every “send this command, but shape the
+output” concern in one place.  The module exposes a small render-filter stack,
+the public quiet-send helper, and interactive tooling to tune the timers that
+keep prompts hidden while shell commands run.
+
+## Loading
 
 ```elisp
 ;; Adjust the path if you cloned the repo elsewhere.
-(setq czq-root (expand-file-name "czq-comint"
-                                  (file-name-directory
-                                   (or load-file-name default-directory))))
-  (add-to-list 'load-path czq-root)
-  (require 'czq-comint-send)
-```
-
-This note documents the new `czq-comint-send.el` module.  The goal is to keep
-all REPL-send mechanics (quiet execution, output redirection, future streaming
-features) decoupled from `czq-comint.el` so higher-level packages can call into
-the same, well-documented API.
-
-## Quick Start: Quiet Commands
-
-```elisp
+(add-to-list 'load-path "/path/to/czq-comint/")
 (require 'czq-comint)
 (require 'czq-comint-send)
-
-(czq-comint-run "*test-comint*")
-(let* ((proc (get-buffer-process "*test-comint*")))
-  (with-current-buffer (process-buffer proc)
-    (czq-comint--send-command-quietly proc "echo go")
-    (accept-process-output proc (+ czq-comint-send-quiet-teardown-delay 0.05))))
 ```
 
-The helper:
+`czq-comint` pulls in `czq-comint-send` automatically, but requiring it
+explicitly makes the quiet-edit command available even when you are not inside
+`czq-comint-mode`.
 
-1. Verifies the process is live and its buffer is still around.
-2. Registers a *render filter* that silently drops every chunk emitted by the
-   process.
-3. Sends your command (ensuring it ends with `\n`), then appends a small
-   `<czq-comint handler=elisp>` tag that executes
-   `(czq-comint-send--complete-quiet …)` inside Emacs once the shell responds.
-4. `czq-comint-send--complete-quiet` schedules a short timer (defaults to
-   `czq-comint-send-quiet-teardown-delay`) that removes the render filter once
-   the prompt is expected to have arrived.  Pass a numeric third argument to
-   `czq-comint--send-command-quietly` when you need to extend that delay;
-   each increment adds `czq-comint-send-quiet-extra-delay` seconds.
+## Render Filters in a Nutshell
 
-The example simply waits just over the teardown delay so the timer has a chance
-to fire.  Once the delay elapses the shell resumes normal rendering and the
-next prompt becomes visible automatically.
+`czq-comint--preoutput-filter` (defined in `czq-comint.el`) asks
+`czq-comint-send--apply-render-filters` to post-process the fully rendered
+string that would otherwise reach the comint buffer untouched.  Filters live in
+a buffer-local LIFO stack; each one receives the text produced by the next
+filter in the stack (or the raw string for the most recently registered entry)
+and returns the string to forward downstream.
 
-Because output suppression is scoped to a render filter, concurrent quiet
-commands do not fight over `czq-comint-output-enabled`.  The filter stack is
-buffer-local and unwinds cleanly even if the restore tag never arrives (for
-example, when the process dies).
+Key building blocks:
 
-## Helper Commands
+| Function | Purpose |
+| -- | -- |
+| `czq-comint-send--register-filter` | Push a filter closure and optional finalizer. |
+| `czq-comint-send--remove-filter` | Pop an entry, cancelling any pending timer and running its finalizer. |
+| `czq-comint-send--apply-render-filters` | Internal entry point invoked from the pre-output filter. |
+| `czq-comint-send--debug` | Mirrors `czq-comint-debug` output so you can trace filter lifetime. |
 
-- `czq-comint-send-edit-quiet-delays` — interactively inspect or adjust the
-  quiet window in the current buffer.  The command prompts for both teardown and
-  per-increment delays (press RET to keep the existing value) and makes the
-  results buffer-local.
+Higher-level helpers should always follow the same recipe: register a filter,
+send the command, then arrange to remove the filter when the command finishes
+(either immediately or via a tag/timer).
 
-## Render Filter Pipeline
+## Quiet Commands
 
-Every chunk processed by `czq-comint--preoutput-filter` now flows through a
-stack of render filters *after* tag parsing but *before* it reaches comint.
-Filters run in LIFO order, so the most recently registered filter sees the
-chunk first and can short-circuit emission if needed.  Each filter receives the
-rendered string and returns the string (possibly transformed) to feed into the
-next filter.  They may capture side effects (collect output, forward it
-elsewhere, etc.).
+`czq-comint--send-command-quietly` is the one public entry point today.  It:
 
-Key building blocks in `czq-comint-send.el`:
+1. Validates that the process and its buffer are both live.
+2. Registers a render filter that replaces every chunk with `""`, keeping the
+   shell silent.
+3. Normalises the command so it always ends with a newline.
+4. Appends a restore tag:
 
-| Helper | Purpose |
-|--------|---------|
-| `czq-comint-send--register-filter` | Push a filter onto the stack, optionally with a finalizer. |
-| `czq-comint-send--remove-filter` | Pop a filter manually, running its finalizer. |
-| `czq-comint-send--apply-render-filters` | Internal entrypoint invoked from `czq-comint.el` after accumulation. |
+   ```elisp
+   <czq-comint handler=elisp>
+     (czq-comint-send--complete-quiet 'FILTER-ID DELAY)
+   </czq-comint>
+   ```
 
-While only the quiet helper is public today, future sending APIs should follow
-the same pattern:
+   The tag runs inside Emacs once the shell echoes it, giving us a hook to tear
+   down the quiet window.
 
-1. Register a filter that implements the desired behaviour (record, redirect,
-   transform, etc.).
-2. Send the command (quietly or not).
-3. Arrange for a follow-up tag or hook to call `czq-comint-send--remove-filter`
-   when you're done.
+5. Sends both payload and tag through `comint-send-string`.
 
-Internally, `czq-comint--preoutput-filter` (from `czq-comint.el`) invokes
-`czq-comint-send--apply-render-filters` after it converts parser tokens into a
-single string.  Whatever the filters return becomes the text that comint shows.
-Send helpers therefore only need to register a filter before talking to the
-process and make sure they remove it afterwards.  For quiet sends this cleanup
-is triggered by the restore tag, which executes
-`czq-comint-send--complete-quiet` inside Emacs.  Because the filter stack is
-buffer-local and stack-based, multiple concurrent sends do not interfere with
-each other: each command owns its filter entry and removes it when finished.
+`czq-comint-send--complete-quiet` looks up the filter entry and schedules a
+timer via `czq-comint-send--schedule-removal`.  The timer delay defaults to
+`czq-comint-send-quiet-delay`, but you can override that per command via the
+optional third argument to `czq-comint--send-command-quietly`.  When the timer fires,
+`czq-comint-send--teardown-filter` removes the entry so the next prompt renders
+normally.  Passing zero (or any negative number, which is clamped to zero)
+collapses the window immediately.
 
-## Example: Capturing Output
+Because the suppression lives inside the render-filter layer, concurrent quiet
+operations coexist peacefully—each call owns exactly one filter entry and the
+stack is unwound independently even if a process exits mid-command.
+
+### Example Session
+
+```elisp
+(czq-comint-run "*quiet-demo*")
+(let ((proc (get-buffer-process "*quiet-demo*")))
+  (czq-comint--send-command-quietly proc "echo setup" 0.3)
+  ;; Wait long enough for the teardown timer; adjust if you customise delays.
+  (accept-process-output proc 0.5))
+```
+
+## Timer and Delay Controls
+
+The quiet window is governed by a single customizable variable:
+
+- `czq-comint-send-quiet-delay` — defaults to `0.05` seconds and becomes
+  buffer-local as soon as it is set.
+
+Override it programmatically for one buffer:
+
+```elisp
+(with-current-buffer "*quiet-demo*"
+  (setq-local czq-comint-send-quiet-delay 0.4))
+```
+
+Or call `M-x czq-comint-send-edit-quiet-delays`, which prompts for the new
+value and accepts `RET` to keep the current setting.  The helper ensures the
+value is a non-negative float and immediately reports the new configuration.
+
+## Building New Helpers
+
+Quiet sends are just one application of the filter stack.  A custom helper can
+capture command output without displaying it, forward it to another buffer, or
+pipe it through a formatter before comint renders it.  The skeleton below shows
+how to capture output synchronously:
 
 ```elisp
 (defun czq-comint-send-capture (process command)
-  "Send COMMAND and return the captured output as a string."
-  (let (accumulator)
+  (let ((result ""))
     (with-current-buffer (process-buffer process)
-      (let* ((entry
-              (czq-comint-send--register-filter
-               (lambda (chunk)
-                 (setq accumulator (concat accumulator chunk))
-                 ""))))
+      (let ((entry (czq-comint-send--register-filter
+                    (lambda (chunk)
+                      (setq result (concat result chunk))
+                      ""))))
         (unwind-protect
             (progn
               (comint-send-string process (concat command "\n"))
-              (accept-process-output process 0.1)) ; wait for response
+              (accept-process-output process 0.1))
           (czq-comint-send--remove-filter entry))))
-    accumulator))
+    result))
 ```
 
-This snippet sketches how the render filter stack can be used to build richer
-send helpers without touching `czq-comint.el`.  You can extend the idea to
-redirect into a log buffer, emit notifications, or feed completion data back to
-source buffers.
+This mirrors the quiet helper’s pattern: register, send, clean up.  Any helper
+that reuses the stack should continue to rely on the restore tag technique (or
+an equivalent callback) so filter state cannot leak if the process exits
+unexpectedly.
 
-## Design Notes
+## Where It’s Used Today
 
-- Filters operate on already-rendered strings, so they see the same text the
-  user would.  Handlers and directory tracking ran earlier, so state is kept in
-  sync even when output is suppressed.
-- Quiet sends keep their render filter alive until the teardown timer fires.
-  Tweak `czq-comint-send-quiet-teardown-delay` (and the extra delay increments)
-  to decide how long the suppression window lasts.
-- Both timing variables are buffer-local.  Call
-  `(setq-local czq-comint-send-quiet-teardown-delay 5.0)` for a one-off long
-  window, or adjust `czq-comint-send-quiet-extra-delay` when the optional third
-  argument should add a larger increment.
-- `czq-comint--send-command-quietly` remains the backwards-compatible public
-  entry point.  Higher-level features should wrap it (or compose their own
-  filters) instead of reusing the legacy `czq-comint-output-enabled` flag.
-- Upcoming modules (`czq-comint-source.el`, completion adapters, etc.) can
-  rely on this layer for all process I/O concerns, keeping the rest of the
-  codebase agnostic of how commands actually reach the REPL.
+- `czq-comint-run` employs quiet sends to `cd` into the originating directory
+  without flashing intermediate prompts.
+- `czq-comint-completion-refresh-from-process` leverages the helper twice: once
+  to fetch the live `$PATH`, and again to install a restore tag that re-enables
+  output as soon as the shell reports completion.
+
+Any future modules can adopt the same approach without coordinating with
+`czq-comint.el`; the render-filter layer is purpose-built for that reuse.

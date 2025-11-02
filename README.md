@@ -105,14 +105,15 @@ pulls in both `czq-comint.el` and the XML parser.
   that discards process output, sends the command (adding a trailing newline if
   necessary), and queues a `<czq-comint handler=elisp>` restore tag that calls
   `czq-comint-send--complete-quiet` to remove the filter after a short timer.
-  Tweak `czq-comint-send-quiet-teardown-delay` (and the optional
-  `czq-comint-send-quiet-extra-delay` increments via the helper’s third
-  argument) to control how long the quiet window lasts before prompts
-  reappear—for example,
-  `(setq-local czq-comint-send-quiet-teardown-delay 5.0)` keeps the filter in
-  place for five seconds in the current buffer.
-- Use `czq-comint-send-edit-quiet-delays` to inspect or update those delay
-  values interactively in any `czq-comint-mode` buffer.
+  Tweak `czq-comint-send-quiet-delay` to control how long the quiet window
+  lasts before prompts reappear.  The optional third argument to
+  `czq-comint--send-command-quietly` overrides the delay for that invocation—for
+  example, `(czq-comint--send-command-quietly proc \"source env/bin/activate\" 1.0)`
+  holds the filter for a full second so activation banners stay hidden.  Set the
+  buffer-local default via `(setq-local czq-comint-send-quiet-delay 5.0)` when you
+  want a longer window everywhere.
+- Use `czq-comint-send-edit-quiet-delays` to inspect or update the delay
+  interactively in any `czq-comint-mode` buffer.
 - `czq-comint-run` calls the helper automatically to align a new shell with the
   invoking `default-directory`.  You can reuse it from other code—for example,
   to `source` a virtualenv or trigger a PATH refresh—without leaving stray

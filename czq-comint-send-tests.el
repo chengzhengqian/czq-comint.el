@@ -45,7 +45,7 @@
                            (when (and scheduled
                                       (eq timer (plist-get scheduled :id)))
                              (setq scheduled nil)))))
-                (czq-comint--send-command-quietly process "echo quiet" 0)
+                (czq-comint--send-command-quietly process "echo quiet")
                 (should (string-match-p "echo quiet\n" sent))
                 (should (string-match-p "czq-comint-send--complete-quiet" sent))
                 ;; Quiet filter active: suppress arbitrary output.
@@ -53,7 +53,7 @@
                 (should czq-comint-send--render-filters)
                 ;; Completing the quiet send schedules the teardown timer.
                 (let ((entry (car czq-comint-send--render-filters)))
-                  (czq-comint-send--complete-quiet (plist-get entry :id) 0))
+                  (czq-comint-send--complete-quiet (plist-get entry :id) nil))
                 (should scheduled)
                 ;; Prompt arriving before the timer fires is still suppressed.
                 (should (equal "" (czq-comint--preoutput-filter "prompt\n")))
@@ -89,8 +89,8 @@
         (when (process-live-p process)
           (delete-process process))))))
 
-(ert-deftest czq-comint-send-quiet-timer-respects-extra-delay ()
-  "Extra skip increments should extend the teardown delay."
+(ert-deftest czq-comint-send-quiet-uses-explicit-delay ()
+  "Explicit delay overrides should control the teardown timer."
   (with-temp-buffer
     (czq-comint-mode)
     (let ((entry (czq-comint-send--register-filter #'czq-comint-send--quiet-filter))
@@ -111,46 +111,64 @@
                    (when (and scheduled
                               (eq timer (plist-get scheduled :id)))
                      (setq scheduled nil)))))
-        (czq-comint-send--complete-quiet (plist-get entry :id) 2))
+        (czq-comint-send--complete-quiet (plist-get entry :id) 0.75))
       (should scheduled)
-      (let* ((expected (+ czq-comint-send-quiet-teardown-delay
-                          (* 2 czq-comint-send-quiet-extra-delay)))
-             (actual (plist-get scheduled :secs)))
-        (should (equal expected actual)))
+      (let ((actual (plist-get scheduled :secs)))
+        (should (= 0.75 actual)))
       ;; Fire timer to ensure cleanup occurs.
       (let ((fn (plist-get scheduled :fn))
             (args (plist-get scheduled :args)))
         (setq scheduled nil)
         (apply fn args))
-      (should (null czq-comint-send--render-filters)))))
+      (should (null czq-comint-send--render-filters))))
+  ;; Default delay is used when override is nil.
+  (with-temp-buffer
+    (czq-comint-mode)
+    (setq-local czq-comint-send-quiet-delay 0.2)
+    (let ((entry (czq-comint-send--register-filter #'czq-comint-send--quiet-filter))
+          (scheduled nil))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (secs repeat fn &rest args)
+                   (should (null repeat))
+                   (let ((id (gensym "timer")))
+                     (setq scheduled (list :id id
+                                           :secs secs
+                                           :fn fn
+                                           :args args))
+                     id))))
+        (czq-comint-send--complete-quiet (plist-get entry :id) nil))
+      (should (= 0.2 (plist-get scheduled :secs)))
+      (let ((fn (plist-get scheduled :fn))
+            (args (plist-get scheduled :args)))
+        (setq scheduled nil)
+        (apply fn args))
+      (should (null czq-comint-send--render-filters)))
+    (should (null czq-comint-send--render-filters))))
 
 (ert-deftest czq-comint-send-edit-quiet-delays-updates-values ()
   "Interactive editor should update buffer-local quiet delay variables."
   (with-temp-buffer
     (czq-comint-mode)
-    (let ((inputs '("1.5" "0.2")))
+    (let ((inputs '("1.5")))
       (cl-letf (((symbol-function 'read-from-minibuffer)
                  (lambda (&rest _)
                    (pop inputs)))
                 ((symbol-function 'message) #'ignore))
         (czq-comint-send-edit-quiet-delays)))
-    (should (= czq-comint-send-quiet-teardown-delay 1.5))
-    (should (= czq-comint-send-quiet-extra-delay 0.2))))
+    (should (= czq-comint-send-quiet-delay 1.5))))
 
 (ert-deftest czq-comint-send-edit-quiet-delays-allows-ret ()
   "Hitting RET at the prompts should keep existing values."
   (with-temp-buffer
     (czq-comint-mode)
-    (setq-local czq-comint-send-quiet-teardown-delay 0.3)
-    (setq-local czq-comint-send-quiet-extra-delay 0.05)
-    (let ((inputs '("" "")))
+    (setq-local czq-comint-send-quiet-delay 0.3)
+    (let ((inputs '("")))
       (cl-letf (((symbol-function 'read-from-minibuffer)
                  (lambda (&rest _)
                    (pop inputs)))
                 ((symbol-function 'message) #'ignore))
         (czq-comint-send-edit-quiet-delays)))
-    (should (= czq-comint-send-quiet-teardown-delay 0.3))
-    (should (= czq-comint-send-quiet-extra-delay 0.05))))
+    (should (= czq-comint-send-quiet-delay 0.3))))
 
 (provide 'czq-comint-send-tests)
 

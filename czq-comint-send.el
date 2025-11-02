@@ -32,15 +32,15 @@
 (defvar czq-comint-send--filter-seq 0
   "Internal counter used to generate unique render filter identifiers.")
 
-(defcustom czq-comint-send-quiet-teardown-delay 0.05
-  "Seconds to wait before removing the quiet-send render filter."
+(defcustom czq-comint-send-quiet-delay 0.05
+  "Default delay (seconds) before the quiet render filter is torn down."
   :type 'number
   :group 'czq-comint)
 
-(defcustom czq-comint-send-quiet-extra-delay 0.05
-  "Extra delay (seconds) added per SKIP increment for quiet sends."
-  :type 'number
-  :group 'czq-comint)
+(define-obsolete-variable-alias 'czq-comint-send-quiet-teardown-delay
+  'czq-comint-send-quiet-delay "0.0.2")
+(define-obsolete-variable-alias 'czq-comint-send-quiet-extra-delay
+  'czq-comint-send-quiet-delay "0.0.2")
 
 (defun czq-comint-send--read-delay (prompt current)
   "Read a non-negative floating delay from the minibuffer.
@@ -60,33 +60,27 @@ PROMPT is shown to the user and CURRENT provides the default."
           (user-error "Delay must be non-negative"))
         (float value)))))
 
-(defun czq-comint-send--quiet-delay-values ()
-  "Return current quiet delay values for the active buffer."
-  (list czq-comint-send-quiet-teardown-delay
-        czq-comint-send-quiet-extra-delay))
+(defun czq-comint-send--quiet-delay-value ()
+  "Return the quiet delay configured for the active buffer."
+  czq-comint-send-quiet-delay)
 
 ;;;###autoload
 (defun czq-comint-send-edit-quiet-delays (&optional buffer)
-  "Inspect or adjust quiet-send delay settings for BUFFER.
-When called interactively operate on the current buffer.  Prompts for
-new teardown and extra-delay values; press RET to keep the current
-value.  The updated values are made buffer-local."
+  "Inspect or adjust the quiet-send delay for BUFFER.
+When called interactively operate on the current buffer.  Prompt for
+the desired delay value; press RET to keep the current value.  The
+updated value is made buffer-local."
   (interactive)
   (let* ((buffer (or buffer (current-buffer))))
     (with-current-buffer buffer
       (unless (derived-mode-p 'czq-comint-mode)
         (user-error "Not in a czq-comint buffer"))
-      (let* ((current (czq-comint-send--quiet-delay-values))
-             (teardown (nth 0 current))
-             (extra (nth 1 current))
-             (new-teardown (czq-comint-send--read-delay
-                            "Quiet teardown delay" teardown))
-             (new-extra (czq-comint-send--read-delay
-                         "Quiet extra increment" extra)))
-        (setq-local czq-comint-send-quiet-teardown-delay new-teardown)
-        (setq-local czq-comint-send-quiet-extra-delay new-extra)
-        (message "Quiet delays for %s: teardown=%0.3fs extra=%0.3fs"
-                 (buffer-name buffer) new-teardown new-extra)))))
+      (let* ((current (czq-comint-send--quiet-delay-value))
+             (new-delay (czq-comint-send--read-delay
+                         "Quiet delay" current)))
+        (setq-local czq-comint-send-quiet-delay new-delay)
+        (message "Quiet delay for %s: %0.3fs"
+                 (buffer-name buffer) new-delay)))))
 
 (defun czq-comint-send--debug (fmt &rest args)
   "Emit a render-filter debug message controlled by `czq-comint-debug'."
@@ -153,19 +147,24 @@ Return the new filter entry."
   "Render filter used by `czq-comint--send-command-quietly'."
   "")
 
-(defun czq-comint-send--quiet-restore-tag (id extra)
+(defun czq-comint-send--quiet-restore-tag (id delay)
   "Return a restore tag that schedules quiet filter ID for removal.
-EXTRA extends the quiet window in `czq-comint-send--complete-quiet'."
+DELAY overrides the buffer's default quiet window when non-nil."
   (let* ((tag (or czq-comint-tag-name "czq-comint"))
-         (body (format "(czq-comint-send--complete-quiet '%S %d)" id (max 0 (or extra 0))))
+         (delay-form (if (numberp delay)
+                         (format "%s" delay)
+                       "nil"))
+         (body (format "(czq-comint-send--complete-quiet '%S %s)" id delay-form))
          (payload (format "<%s handler=elisp>%s</%s>" tag body tag)))
     (format "printf '%%s\\n' %s\n" (shell-quote-argument payload))))
 
-(defun czq-comint-send--quiet-delay (extra)
+(defun czq-comint-send--quiet-delay (override)
   "Return the delay in seconds before removing the quiet filter.
-EXTRA is the numeric argument passed to `czq-comint--send-command-quietly'."
-  (max 0 (+ czq-comint-send-quiet-teardown-delay
-            (* (max 0 (or extra 0)) czq-comint-send-quiet-extra-delay))))
+OVERRIDE, when non-nil, supersedes `czq-comint-send-quiet-delay'."
+  (let ((value (if (numberp override)
+                   override
+                 czq-comint-send-quiet-delay)))
+    (max 0 (float value))))
 
 (defun czq-comint-send--teardown-filter (buffer id)
   "Timer callback removing filter ID from BUFFER."
@@ -175,9 +174,10 @@ EXTRA is the numeric argument passed to `czq-comint--send-command-quietly'."
         (plist-put entry :timer nil)
         (czq-comint-send--remove-filter entry)))))
 
-(defun czq-comint-send--schedule-removal (entry extra)
-  "Schedule quiet filter ENTRY for teardown with EXTRA delay increments."
-  (let* ((delay (czq-comint-send--quiet-delay extra))
+(defun czq-comint-send--schedule-removal (entry delay)
+  "Schedule quiet filter ENTRY for teardown using DELAY seconds.
+When DELAY is nil the buffer's default is used."
+  (let* ((delay (czq-comint-send--quiet-delay delay))
          (buffer (current-buffer))
          (existing (plist-get entry :timer))
          (id (plist-get entry :id)))
@@ -193,12 +193,11 @@ EXTRA is the numeric argument passed to `czq-comint--send-command-quietly'."
         (czq-comint-send--debug "render-filter timer %S delay=%0.3fs"
                                 id delay)))))
 
-(defun czq-comint-send--complete-quiet (id extra)
+(defun czq-comint-send--complete-quiet (id delay)
   "Finalize quiet filter ID and schedule removal after a quiet delay.
-EXTRA extends the delay window by `czq-comint-send-quiet-extra-delay'
-seconds per increment."
+DELAY overrides the buffer's default when non-nil."
   (when-let ((entry (czq-comint-send--find-filter id)))
-    (czq-comint-send--schedule-removal entry extra)))
+    (czq-comint-send--schedule-removal entry delay)))
 
 (defun czq-comint-send--normalize-command (command)
   "Ensure COMMAND ends with a newline."
@@ -207,12 +206,12 @@ seconds per increment."
     (concat command "\n")))
 
 ;;;###autoload
-(defun czq-comint--send-command-quietly (process command &optional skip-strings)
+(defun czq-comint--send-command-quietly (process command &optional delay)
   "Send COMMAND to PROCESS while temporarily suppressing buffer output.
 
-COMMAND is ensured to end with a newline.  SKIP-STRINGS, when non-nil,
-extends the quiet window by `czq-comint-send-quiet-extra-delay' seconds per
-increment before normal rendering resumes."
+COMMAND is ensured to end with a newline.  DELAY, when non-nil, overrides
+the buffer-local `czq-comint-send-quiet-delay` before normal rendering
+resumes."
   (unless (and process (process-live-p process))
     (user-error "Process is not live"))
   (unless (and command (> (length command) 0))
@@ -222,9 +221,9 @@ increment before normal rendering resumes."
       (user-error "Process buffer is unavailable"))
     (with-current-buffer buffer
       (let* ((entry (czq-comint-send--register-filter #'czq-comint-send--quiet-filter))
-             (extra (max 0 (or skip-strings 0)))
+             (override (and (numberp delay) (max 0 delay)))
              (payload (czq-comint-send--normalize-command command))
-             (restore (czq-comint-send--quiet-restore-tag (plist-get entry :id) extra)))
+             (restore (czq-comint-send--quiet-restore-tag (plist-get entry :id) override)))
         (comint-send-string process (concat payload restore))))))
 
 (provide 'czq-comint-send)
