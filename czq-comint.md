@@ -136,6 +136,14 @@ Prefer `M-x czq-comint-send-edit-quiet-delays` for an interactive workflow—the
 command displays the current value and prompts for a new one (press RET to keep
 the existing setting), making the result buffer-local automatically.
 
+When you need to capture output instead of silencing it, reach for the companion
+helpers: `czq-comint-send-to-buffer` streams the command’s output into a buffer
+of your choice (optionally clearing it first), while
+`czq-comint-send-to-point` splices results into the current buffer at a marker
+or the active cursor location.  Both reuse the same render-filter stack and
+restore-tag machinery so the comint buffer stays clean regardless of where the
+output ends up.
+
 When the cache is refreshed from inside Emacs (for example during mode
 initialisation or by calling `czq-comint-completion-refresh` manually) the code
 operates on the raw `$PATH` string from the current environment; no encoding is

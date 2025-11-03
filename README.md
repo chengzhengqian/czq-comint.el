@@ -18,11 +18,10 @@ terminal flow.
 - Completion backend seeded from both a customizable command list and the shell
   process’ live `$PATH`; refresh interactively with
   `czq-comint-completion-refresh-from-process`.
-- Quiet command helper (`czq-comint--send-command-quietly`) that synchronises
-  the shell without flashing extra prompts—used by `czq-comint-run` and the
-  PATH refresh logic.  It installs a render filter that discards intermediate
-  output, issues the command, and appends an inline elisp tag that tears down
-  the filter once the shell has finished responding.
+- Flexible send helpers (`czq-comint--send-command-quietly`,
+  `czq-comint-send-to-buffer`, `czq-comint-send-to-point`) that either silence
+  prompts, redirect output into another buffer, or insert results at point
+  while keeping the comint buffer clean.
 - Debug logging via `czq-comint-debug` to trace handler resolution.
 - Buffer-aware startup commands through `czq-comint-command-alist`.
 - Helper script `scripts/czq-comint-emit-tag.sh` to emit sample tags for manual
@@ -114,6 +113,11 @@ pulls in both `czq-comint.el` and the XML parser.
   want a longer window everywhere.
 - Use `czq-comint-send-edit-quiet-delays` to inspect or update the delay
   interactively in any `czq-comint-mode` buffer.
+- Redirect command output elsewhere when you need to capture results: call
+  `czq-comint-send-to-buffer` to stream output into another buffer (optionally
+  clearing it first) or `czq-comint-send-to-point` to splice results into the
+  current buffer at point.  Both helpers use the same restore-tag machinery, so
+  comint output stays tidy.
 - `czq-comint-run` calls the helper automatically to align a new shell with the
   invoking `default-directory`.  You can reuse it from other code—for example,
   to `source` a virtualenv or trigger a PATH refresh—without leaving stray

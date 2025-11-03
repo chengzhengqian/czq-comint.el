@@ -76,10 +76,16 @@ stack is unwound independently even if a process exits mid-command.
 ### Example Session
 
 ```elisp
-(czq-comint-run "*quiet-demo*")
-(let ((proc (get-buffer-process "*quiet-demo*")))
+;; 1) Start (or reuse) a CZQ comint buffer.
+(czq-comint-run "*czq-demo*")
+
+;; 2) Record the process handle for convenience.
+(setq proc (get-buffer-process "*czq-demo*"))
+
+;; 3) Quietly run a setup command, waiting for the restore tag to arrive.
+(with-current-buffer (process-buffer proc)
+  (setq-local czq-comint-send-quiet-delay 0.2)
   (czq-comint--send-command-quietly proc "echo setup" 0.3)
-  ;; Wait long enough for the teardown timer; adjust if you customise delays.
   (accept-process-output proc 0.5))
 ```
 
@@ -93,13 +99,88 @@ The quiet window is governed by a single customizable variable:
 Override it programmatically for one buffer:
 
 ```elisp
-(with-current-buffer "*quiet-demo*"
+;; Assuming *czq-demo* already exists from the previous example:
+(with-current-buffer "*czq-demo*"
   (setq-local czq-comint-send-quiet-delay 0.4))
 ```
 
 Or call `M-x czq-comint-send-edit-quiet-delays`, which prompts for the new
 value and accepts `RET` to keep the current setting.  The helper ensures the
 value is a non-negative float and immediately reports the new configuration.
+
+## Redirect Output to a Buffer
+
+Use `czq-comint-send-to-buffer` when you want a command’s output to land in a
+separate buffer instead of the comint stream:
+
+```elisp
+;; 1) Make sure *czq-demo* is running and PROC is set (see the quiet example).
+
+;; 2) Prepare the destination buffer.
+(setq log-buffer (get-buffer-create "*czq-log*"))
+(with-current-buffer log-buffer
+  (erase-buffer))
+
+;; 3) Pipe the command output into the log buffer.
+(with-current-buffer (process-buffer proc)
+  (czq-comint-send-to-buffer proc "printf capture" log-buffer nil t))
+
+;; 4) Give the shell a moment to emit the restore tag, then inspect the buffer.
+(accept-process-output proc 0.1)
+(with-current-buffer log-buffer
+  (buffer-string))
+
+;; Nothing new should appear in *czq-demo*; verify it remains unchanged.
+(with-current-buffer (process-buffer proc)
+  (buffer-substring-no-properties (max 1 (- (point-max) 40)) (point-max)))
+```
+- If text still shows up in the comint buffer, double-check that it is in
+  `czq-comint-mode` (start it with `czq-comint-run`).  The redirection helpers
+  rely on the CZQ pre-output filter.
+
+- The third argument names the destination buffer.  Pass a non-nil fifth
+  argument to clear the buffer before the command runs.
+- The optional fourth argument mirrors the quiet helper’s delay override.  For
+  example `(czq-comint-send-to-buffer proc "long-task" log 0.5)` keeps the
+  redirect filter alive for half a second after the shell prints the restore
+  tag so trailing output is still captured.
+- Each chunk is appended verbatim, so the target buffer receives exactly what
+  the shell produced while the comint buffer stays unchanged.
+
+## Insert Output at Point
+
+`czq-comint-send-to-point` splices command output directly into a buffer at a
+marker (or the current cursor position):
+
+```elisp
+;; 1) Create (or reuse) a destination buffer and choose an insertion point.
+(setq dest-buffer (get-buffer-create "*czq-notes*"))
+(with-current-buffer dest-buffer
+  (erase-buffer)
+  (insert "before\nafter")
+  (goto-char (point-min))
+  (forward-line 1)
+  (setq insertion-marker (point-marker))
+  (set-marker-insertion-type insertion-marker t))
+
+;; 2) Insert the command’s output at that marker.
+(with-current-buffer (process-buffer proc)
+  (czq-comint-send-to-point proc "printf insert" insertion-marker 0.2))
+(accept-process-output proc 0.1)
+
+;; 3) Review the updated buffer.
+(with-current-buffer dest-buffer
+  (buffer-string))
+```
+
+- When `MARKER` is nil the helper captures `(point)` from the current buffer and
+  creates a dedicated marker that advances as text is inserted.  Provide your
+  own marker when you want multiple commands to share the same insertion point.
+- The optional delay argument again defers removal of the redirect filter,
+  which can be handy when a command prints a final newline a moment later.
+- Because insertion happens inside the buffer that owns the marker, standard
+  read-only safeguards still apply unless you temporarily bind
+  `inhibit-read-only`.
 
 ## Building New Helpers
 

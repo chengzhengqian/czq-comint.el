@@ -145,6 +145,112 @@
       (should (null czq-comint-send--render-filters)))
     (should (null czq-comint-send--render-filters))))
 
+(ert-deftest czq-comint-send-to-buffer-captures-output ()
+  "Redirect helper should funnel output into the specified buffer."
+  (with-temp-buffer
+    (czq-comint-mode)
+    (let ((process (start-process "czq-send-test" (current-buffer) "cat"))
+          (target (generate-new-buffer " *czq-target*")))
+      (unwind-protect
+          (progn
+            (set-process-query-on-exit-flag process nil)
+            (with-current-buffer target
+              (insert "stale data"))
+            (let ((sent nil))
+              (cl-letf (((symbol-function 'comint-send-string)
+                         (lambda (_proc chunk)
+                           (push chunk sent))))
+                (czq-comint-send-to-buffer process "printf capture" target nil t))
+              (let ((payload (apply #'concat (nreverse sent))))
+                (should (string-match-p "printf capture\n" payload))
+                (should (string-match-p "czq-comint-send--complete-redirect" payload))))
+            (should (equal "" (czq-comint--preoutput-filter "captured\n")))
+            (with-current-buffer target
+              (should (equal (buffer-string) "captured\n")))
+            (let ((entry (car czq-comint-send--render-filters)))
+              (czq-comint-send--complete-redirect (plist-get entry :id) 0))
+            (should (null czq-comint-send--render-filters)))
+        (when (buffer-live-p target)
+          (kill-buffer target))
+        (when (process-live-p process)
+          (delete-process process))))))
+
+(ert-deftest czq-comint-send-to-point-inserts-output ()
+  "Redirecting to a marker should insert text at that position."
+  (let ((dest (generate-new-buffer " *czq-dest*")))
+    (unwind-protect
+        (with-temp-buffer
+          (czq-comint-mode)
+          (let ((process (start-process "czq-send-test" (current-buffer) "cat")))
+            (unwind-protect
+                (progn
+                  (set-process-query-on-exit-flag process nil)
+                  (with-current-buffer dest
+                    (insert "before\n" "after")
+                    (goto-char (point-min))
+                    (forward-line 1))
+                  (let ((sent nil)
+                        marker)
+                    (cl-letf (((symbol-function 'comint-send-string)
+                               (lambda (_proc chunk)
+                                 (push chunk sent))))
+                      (setq marker
+                            (with-current-buffer dest
+                              (goto-char (point-min))
+                              (forward-line 1)
+                              (czq-comint-send-to-point process "printf insert"))))
+                    (let ((payload (apply #'concat (nreverse sent))))
+                      (should (string-match-p "printf insert\n" payload))
+                      (should (string-match-p "czq-comint-send--complete-redirect" payload)))
+                    (should (equal "" (czq-comint--preoutput-filter "drop-in\n")))
+                    (with-current-buffer dest
+                      (should (string-equal (buffer-string) "before\ndrop-in\nafter"))
+                      (should (eq (marker-buffer marker) dest)))
+                    (let ((entry (car czq-comint-send--render-filters)))
+                      (czq-comint-send--complete-redirect (plist-get entry :id) 0))
+                    (should (null czq-comint-send--render-filters))))
+              (when (process-live-p process)
+                (delete-process process)))))
+      (when (buffer-live-p dest)
+        (kill-buffer dest))))) 
+
+(ert-deftest czq-comint-send-to-buffer-integration ()
+  "End-to-end check that a real comint process redirects output elsewhere."
+  (let* ((comint-buffer (get-buffer-create " *czq-integration*"))
+         (log-buffer (get-buffer-create " *czq-integration-log*"))
+         (proc nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer comint-buffer
+            (setq default-directory temporary-file-directory))
+          (make-comint-in-buffer "czq-integration"
+                                 comint-buffer
+                                 "bash" nil "--noprofile" "--norc")
+          (setq proc (get-buffer-process comint-buffer))
+          (with-current-buffer comint-buffer
+            (czq-comint-mode))
+          (accept-process-output proc 0.2)
+          (with-current-buffer log-buffer
+            (erase-buffer))
+          (with-current-buffer comint-buffer
+            (czq-comint-send-to-buffer proc "printf integration" log-buffer nil t))
+          (accept-process-output proc 0.3)
+          (with-current-buffer log-buffer
+            (should (string-match-p "integration" (buffer-string))))
+          (with-current-buffer comint-buffer
+            (let ((tail (buffer-substring-no-properties
+                         (max (point-min) (- (point-max) 80))
+                         (point-max))))
+              (should-not (string-match-p "integration" tail)))))
+      (when (and proc (process-live-p proc))
+        (delete-process proc))
+      (when (buffer-live-p comint-buffer)
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer comint-buffer)))
+      (when (buffer-live-p log-buffer)
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer log-buffer))))))
+
 (ert-deftest czq-comint-send-edit-quiet-delays-updates-values ()
   "Interactive editor should update buffer-local quiet delay variables."
   (with-temp-buffer
