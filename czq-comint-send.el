@@ -207,11 +207,10 @@ DELAY overrides the buffer's default when non-nil."
   (when-let ((entry (czq-comint-send--find-filter id)))
     (czq-comint-send--schedule-removal entry delay)))
 
-(defun czq-comint-send--complete-redirect (id delay)
-  "Finalize redirect filter ID and remove it after DELAY seconds.
-When DELAY is nil the filter is removed immediately."
+(defun czq-comint-send--complete-redirect (id)
+  "Finalize redirect filter ID and remove it immediately."
   (when-let ((entry (czq-comint-send--find-filter id)))
-    (czq-comint-send--schedule-removal entry delay)))
+    (czq-comint-send--remove-filter entry)))
 
 (defun czq-comint-send--normalize-command (command)
   "Ensure COMMAND ends with a newline."
@@ -220,10 +219,10 @@ When DELAY is nil the filter is removed immediately."
     (concat command "\n")))
 
 ;;;###autoload
-(defun czq-comint--send-command-quietly (process command &optional delay)
+(defun czq-comint--send-command-quietly (process command &optional extend)
   "Send COMMAND to PROCESS while temporarily suppressing buffer output.
 
-COMMAND is ensured to end with a newline.  DELAY, when non-nil, overrides
+COMMAND is ensured to end with a newline.  EXTEND, when non-nil, adds to
 the buffer-local `czq-comint-send-quiet-delay` before normal rendering
 resumes."
   (unless (and process (process-live-p process))
@@ -235,7 +234,7 @@ resumes."
       (user-error "Process buffer is unavailable"))
     (with-current-buffer buffer
       (let* ((entry (czq-comint-send--register-filter #'czq-comint-send--quiet-filter))
-             (override (and (numberp delay) (max 0 delay)))
+             (override (and (numberp extend) (max 0 extend)))
              (payload (czq-comint-send--normalize-command command))
              (restore (apply #'czq-comint-send--restore-tag
                              'czq-comint-send--complete-quiet
@@ -243,12 +242,11 @@ resumes."
         (comint-send-string process (concat payload restore))))))
 
 ;;;###autoload
-(defun czq-comint-send-to-buffer (process command buffer &optional delay erase)
+(defun czq-comint-send-to-buffer (process command buffer &optional erase)
   "Send COMMAND to PROCESS and redirect output into BUFFER.
 
-When ERASE is non-nil, BUFFER is cleared before the command runs.  DELAY,
-when non-nil, defers removal of the redirect filter for the specified number
-of seconds after the command signals completion."
+When ERASE is non-nil, BUFFER is cleared before the command runs.  The redirect
+filter is removed immediately after the restore tag executes."
   (unless (and process (process-live-p process))
     (user-error "Process is not live"))
   (unless (and command (> (length command) 0))
@@ -259,30 +257,29 @@ of seconds after the command signals completion."
     (when erase
       (let ((inhibit-read-only t))
         (erase-buffer))))
-  (let ((override (and (numberp delay) (max 0 delay))))
-    (with-current-buffer (process-buffer process)
-      (let* ((entry
-              (czq-comint-send--register-filter
-               (lambda (chunk)
-                 (when (buffer-live-p buffer)
-                   (with-current-buffer buffer
-                     (let ((inhibit-read-only t))
-                       (goto-char (point-max))
-                       (insert chunk))))
-                 "")))
-             (payload (czq-comint-send--normalize-command command))
-             (restore (apply #'czq-comint-send--restore-tag
-                             'czq-comint-send--complete-redirect
-                             (list (plist-get entry :id) override))))
-        (comint-send-string process (concat payload restore))))))
+  (with-current-buffer (process-buffer process)
+    (let* ((entry
+            (czq-comint-send--register-filter
+             (lambda (chunk)
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (let ((inhibit-read-only t))
+                     (goto-char (point-max))
+                     (insert chunk))))
+             "")))
+           (payload (czq-comint-send--normalize-command command))
+           (restore (apply #'czq-comint-send--restore-tag
+                           'czq-comint-send--complete-redirect
+                           (list (plist-get entry :id)))))
+      (comint-send-string process (concat payload restore)))))
 
 ;;;###autoload
-(defun czq-comint-send-to-point (process command &optional marker delay)
+(defun czq-comint-send-to-point (process command &optional marker)
   "Send COMMAND to PROCESS and insert output at MARKER (or point).
 
 When MARKER is nil, use the current buffer and point to create a fresh marker
-that advances as text is inserted.  DELAY, when non-nil, defers removal of the
-redirect filter by the specified number of seconds."
+that advances as text is inserted.  The redirect filter is removed immediately
+after the restore tag executes."
   (unless (and process (process-live-p process))
     (user-error "Process is not live"))
   (unless (and command (> (length command) 0))
@@ -295,23 +292,22 @@ redirect filter by the specified number of seconds."
                  (marker-buffer marker))
       (user-error "MARKER does not reference a live buffer"))
     (set-marker-insertion-type marker t)
-    (let ((override (and (numberp delay) (max 0 delay))))
-      (with-current-buffer (process-buffer process)
-        (let* ((entry
-                (czq-comint-send--register-filter
-                 (lambda (chunk)
-                   (when (marker-buffer marker)
-                     (with-current-buffer (marker-buffer marker)
-                       (let ((inhibit-read-only t))
-                         (save-excursion
-                           (goto-char marker)
-                           (insert chunk)))))
-                   "")))
-               (payload (czq-comint-send--normalize-command command))
-               (restore (apply #'czq-comint-send--restore-tag
-                               'czq-comint-send--complete-redirect
-                               (list (plist-get entry :id) override))))
-          (comint-send-string process (concat payload restore)))))
+    (with-current-buffer (process-buffer process)
+      (let* ((entry
+              (czq-comint-send--register-filter
+               (lambda (chunk)
+                 (when (marker-buffer marker)
+                   (with-current-buffer (marker-buffer marker)
+                     (let ((inhibit-read-only t))
+                       (save-excursion
+                         (goto-char marker)
+                         (insert chunk)))))
+               "")))
+             (payload (czq-comint-send--normalize-command command))
+             (restore (apply #'czq-comint-send--restore-tag
+                             'czq-comint-send--complete-redirect
+                             (list (plist-get entry :id)))))
+        (comint-send-string process (concat payload restore))))
     marker))
 
 (provide 'czq-comint-send)

@@ -17,6 +17,13 @@
 
 (defvar czq-comint-send--render-filters)
 
+(defun czq-comint-test--restore-output (entry)
+  "Return the restore tag output emitted for ENTRY teardown."
+  (let* ((tag (or czq-comint-tag-name "czq-comint"))
+         (arg (czq-comint-send--format-restore-arg (plist-get entry :id))))
+    (format "<%s handler=elisp>(czq-comint-send--complete-redirect %s)</%s>\n"
+            tag arg tag)))
+
 (ert-deftest czq-comint-send-quiet-suppresses-output ()
   "Quiet helper should silence output until the teardown timer fires."
   (with-temp-buffer
@@ -160,7 +167,7 @@
               (cl-letf (((symbol-function 'comint-send-string)
                          (lambda (_proc chunk)
                            (push chunk sent))))
-                (czq-comint-send-to-buffer process "printf capture" target nil t))
+                (czq-comint-send-to-buffer process "printf capture" target t))
               (let ((payload (apply #'concat (nreverse sent))))
                 (should (string-match-p "printf capture\n" payload))
                 (should (string-match-p "czq-comint-send--complete-redirect" payload))))
@@ -168,7 +175,9 @@
             (with-current-buffer target
               (should (equal (buffer-string) "captured\n")))
             (let ((entry (car czq-comint-send--render-filters)))
-              (czq-comint-send--complete-redirect (plist-get entry :id) 0))
+              (should entry)
+              (czq-comint--preoutput-filter
+               (czq-comint-test--restore-output entry)))
             (should (null czq-comint-send--render-filters)))
         (when (buffer-live-p target)
           (kill-buffer target))
@@ -207,12 +216,14 @@
                       (should (string-equal (buffer-string) "before\ndrop-in\nafter"))
                       (should (eq (marker-buffer marker) dest)))
                     (let ((entry (car czq-comint-send--render-filters)))
-                      (czq-comint-send--complete-redirect (plist-get entry :id) 0))
+                      (should entry)
+                      (czq-comint--preoutput-filter
+                       (czq-comint-test--restore-output entry))))
                     (should (null czq-comint-send--render-filters))))
               (when (process-live-p process)
                 (delete-process process)))))
       (when (buffer-live-p dest)
-        (kill-buffer dest))))) 
+        (kill-buffer dest)))) 
 
 (ert-deftest czq-comint-send-to-buffer-integration ()
   "End-to-end check that a real comint process redirects output elsewhere."
@@ -233,7 +244,7 @@
           (with-current-buffer log-buffer
             (erase-buffer))
           (with-current-buffer comint-buffer
-            (czq-comint-send-to-buffer proc "printf integration" log-buffer nil t))
+            (czq-comint-send-to-buffer proc "printf integration" log-buffer t))
           (accept-process-output proc 0.3)
           (with-current-buffer log-buffer
             (should (string-match-p "integration" (buffer-string))))
@@ -241,7 +252,9 @@
             (let ((tail (buffer-substring-no-properties
                          (max (point-min) (- (point-max) 80))
                          (point-max))))
-              (should-not (string-match-p "integration" tail)))))
+              (should-not (string-match-p "integration" tail)))
+            (accept-process-output proc 0.1)
+            (should (null czq-comint-send--render-filters))))
       (when (and proc (process-live-p proc))
         (delete-process proc))
       (when (buffer-live-p comint-buffer)

@@ -299,25 +299,36 @@ Recognises common true-ish string values such as \"true\", \"t\", \"yes\", and \
            (format "[czq-comint handler %S error] %s"
                    symbol (error-message-string err))))))))
 
+(defun czq-comint--render-token (token)
+  "Return the rendered string for TOKEN, respecting output toggles."
+  (cond
+   ((stringp token)
+    (if czq-comint-output-enabled
+        (progn
+          (when czq-comint-debug
+            (czq-comint--debug "%s emitting string token: %s"
+                               (czq-comint--debug-timestamp)
+                               (czq-comint--debug-summarize token)))
+          token)
+      (when czq-comint-debug
+        (czq-comint--debug "%s skipping string while output disabled: %s"
+                           (czq-comint--debug-timestamp)
+                           (czq-comint--debug-summarize token)))
+      ""))
+   (t
+    (czq-comint--dispatch-tag token))))
+
 (defun czq-comint--accumulate-output (tokens)
-  "Convert TOKENS from the parser into a single output string."
+  "Convert TOKENS from the parser into a single output string.
+Each rendered token is passed through the CZQ render-filter stack
+before being concatenated."
   (let ((pieces '()))
     (dolist (token tokens)
-      (cond
-       ((stringp token)
-        (if czq-comint-output-enabled
-            (progn
-              (when czq-comint-debug
-                (czq-comint--debug "%s emitting string token: %s"
-                                   (czq-comint--debug-timestamp)
-                                   (czq-comint--debug-summarize token)))
-              (push token pieces))
-          (when czq-comint-debug
-            (czq-comint--debug "%s skipping string while output disabled: %s"
-                               (czq-comint--debug-timestamp)
-                               (czq-comint--debug-summarize token)))))
-       (t
-        (push (czq-comint--dispatch-tag token) pieces))))
+      (let* ((rendered (czq-comint--render-token token))
+             (filtered (if (fboundp 'czq-comint-send--apply-render-filters)
+                           (czq-comint-send--apply-render-filters rendered)
+                         rendered)))
+        (push filtered pieces)))
     (apply #'concat (nreverse pieces))))
 
 (defun czq-comint--preoutput-filter (output)
@@ -344,18 +355,15 @@ updating buffer-local state for downstream consumers such as completion."
                            (czq-comint--debug-format-tokens tokens))))
     (setq czq-comint--parser-state state)
     (let* ((rendered (czq-comint--accumulate-output tokens))
-           (filtered (if (fboundp 'czq-comint-send--apply-render-filters)
-                         (czq-comint-send--apply-render-filters rendered)
-                       rendered)))
-      (let ((suppressed (not czq-comint-output-enabled)))
-        (when czq-comint-debug
-          (let ((timestamp (czq-comint--debug-timestamp)))
-            (czq-comint--debug "%s rendered (len=%d, suppressed=%s) chunk=%s"
-                               timestamp
-                               (length filtered)
-                               suppressed
-                               (czq-comint--debug-summarize filtered))))
-        (if suppressed "" filtered)))))
+           (suppressed (not czq-comint-output-enabled)))
+      (when czq-comint-debug
+        (let ((timestamp (czq-comint--debug-timestamp)))
+          (czq-comint--debug "%s rendered (len=%d, suppressed=%s) chunk=%s"
+                             timestamp
+                             (length rendered)
+                             suppressed
+                             (czq-comint--debug-summarize rendered))))
+      (if suppressed "" rendered))))
 
 (defun czq-comint--local-czq-variables ()
   "Return a sorted list of CZQ comint-specific buffer-local variables."

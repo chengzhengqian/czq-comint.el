@@ -106,7 +106,7 @@ pulls in both `czq-comint.el` and the XML parser.
   `czq-comint-send--complete-quiet` to remove the filter after a short timer.
   Tweak `czq-comint-send-quiet-delay` to control how long the quiet window
   lasts before prompts reappear.  The optional third argument to
-  `czq-comint--send-command-quietly` overrides the delay for that invocation—for
+  `czq-comint--send-command-quietly` extends the quiet window for that invocation—for
   example, `(czq-comint--send-command-quietly proc \"source env/bin/activate\" 1.0)`
   holds the filter for a full second so activation banners stay hidden.  Set the
   buffer-local default via `(setq-local czq-comint-send-quiet-delay 5.0)` when you
@@ -116,8 +116,8 @@ pulls in both `czq-comint.el` and the XML parser.
 - Redirect command output elsewhere when you need to capture results: call
   `czq-comint-send-to-buffer` to stream output into another buffer (optionally
   clearing it first) or `czq-comint-send-to-point` to splice results into the
-  current buffer at point.  Both helpers use the same restore-tag machinery, so
-  comint output stays tidy.
+  current buffer at point.  Both helpers drop their filters as soon as the
+  restore tag runs, keeping comint output tidy.
 - `czq-comint-run` calls the helper automatically to align a new shell with the
   invoking `default-directory`.  You can reuse it from other code—for example,
   to `source` a virtualenv or trigger a PATH refresh—without leaving stray

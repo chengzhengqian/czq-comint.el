@@ -40,6 +40,10 @@ Higher-level helpers should always follow the same recipe: register a filter,
 send the command, then arrange to remove the filter when the command finishes
 (either immediately or via a tag/timer).
 
+Each parser token is rendered and passed through the stack as soon as it is
+produced, so helpers can react incrementally instead of waiting for an entire
+chunk of process output.
+
 ## Quiet Commands
 
 `czq-comint--send-command-quietly` is the one public entry point today.  It:
@@ -123,7 +127,7 @@ separate buffer instead of the comint stream:
 
 ;; 3) Pipe the command output into the log buffer.
 (with-current-buffer (process-buffer proc)
-  (czq-comint-send-to-buffer proc "printf capture" log-buffer nil t))
+  (czq-comint-send-to-buffer proc "printf capture" log-buffer t))
 
 ;; 4) Give the shell a moment to emit the restore tag, then inspect the buffer.
 (accept-process-output proc 0.1)
@@ -138,14 +142,10 @@ separate buffer instead of the comint stream:
   `czq-comint-mode` (start it with `czq-comint-run`).  The redirection helpers
   rely on the CZQ pre-output filter.
 
-- The third argument names the destination buffer.  Pass a non-nil fifth
+- The third argument names the destination buffer.  Pass a non-nil fourth
   argument to clear the buffer before the command runs.
-- The optional fourth argument mirrors the quiet helper’s delay override.  For
-  example `(czq-comint-send-to-buffer proc "long-task" log 0.5)` keeps the
-  redirect filter alive for half a second after the shell prints the restore
-  tag so trailing output is still captured.
-- Each chunk is appended verbatim, so the target buffer receives exactly what
-  the shell produced while the comint buffer stays unchanged.
+- Each chunk is appended verbatim, and the redirect filter disappears as soon
+  as the restore tag executes, so the comint buffer stays unchanged.
 
 ## Insert Output at Point
 
@@ -165,7 +165,7 @@ marker (or the current cursor position):
 
 ;; 2) Insert the command’s output at that marker.
 (with-current-buffer (process-buffer proc)
-  (czq-comint-send-to-point proc "printf insert" insertion-marker 0.2))
+  (czq-comint-send-to-point proc "printf insert" insertion-marker))
 (accept-process-output proc 0.1)
 
 ;; 3) Review the updated buffer.
@@ -176,8 +176,6 @@ marker (or the current cursor position):
 - When `MARKER` is nil the helper captures `(point)` from the current buffer and
   creates a dedicated marker that advances as text is inserted.  Provide your
   own marker when you want multiple commands to share the same insertion point.
-- The optional delay argument again defers removal of the redirect filter,
-  which can be handy when a command prints a final newline a moment later.
 - Because insertion happens inside the buffer that owns the marker, standard
   read-only safeguards still apply unless you temporarily bind
   `inhibit-read-only`.
