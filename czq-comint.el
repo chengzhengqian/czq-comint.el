@@ -24,6 +24,7 @@
 (require 'czq-xml-parser)
 (require 'czq-comint-dirtrack)
 (require 'czq-comint-completion)
+(require 'czq-comint-track-repl)
 
 (declare-function czq-comint-send--apply-render-filters "czq-comint-send" (chunk))
 
@@ -446,6 +447,8 @@ The core functionality is not implemented yet."
   (setq-local czq-comint-current-directory
               (file-name-as-directory (expand-file-name default-directory)))
   (setq-local czq-comint-output-enabled t)
+  (setq-local czq-comint-track-repl-name 'bash)
+  (setq-local czq-comint-track-repl-last-command nil)
   (czq-comint-completion-refresh)
   (setq-local completion-at-point-functions
               '(czq-comint-completion-at-point))
@@ -458,6 +461,9 @@ The core functionality is not implemented yet."
   (set (make-local-variable 'company-sort-by-occurrence) nil)
   (add-hook 'comint-preoutput-filter-functions
             #'czq-comint--preoutput-filter
+            nil t)
+  (add-hook 'comint-input-filter-functions
+            #'czq-comint-track-repl--input-filter
             nil t)
   )
 

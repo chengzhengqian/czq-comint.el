@@ -19,6 +19,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'comint)
+(require 'czq-comint-track-repl)
 
 (declare-function czq-comint--debug "czq-comint" (format-string &rest args))
 (declare-function czq-comint--debug-timestamp "czq-comint" ())
@@ -233,6 +234,7 @@ resumes."
     (unless (buffer-live-p buffer)
       (user-error "Process buffer is unavailable"))
     (with-current-buffer buffer
+      (czq-comint-track-repl-register-command command)
       (let* ((entry (czq-comint-send--register-filter #'czq-comint-send--quiet-filter))
              (override (and (numberp extend) (max 0 extend)))
              (payload (czq-comint-send--normalize-command command))
@@ -258,6 +260,7 @@ filter is removed immediately after the restore tag executes."
       (let ((inhibit-read-only t))
         (erase-buffer))))
   (with-current-buffer (process-buffer process)
+    (czq-comint-track-repl-register-command command)
     (let* ((entry
             (czq-comint-send--register-filter
              (lambda (chunk)
@@ -293,6 +296,7 @@ after the restore tag executes."
       (user-error "MARKER does not reference a live buffer"))
     (set-marker-insertion-type marker t)
     (with-current-buffer (process-buffer process)
+      (czq-comint-track-repl-register-command command)
       (let* ((entry
               (czq-comint-send--register-filter
                (lambda (chunk)

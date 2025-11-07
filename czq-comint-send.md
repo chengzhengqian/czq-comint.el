@@ -180,6 +180,33 @@ marker (or the current cursor position):
   read-only safeguards still apply unless you temporarily bind
   `inhibit-read-only`.
 
+## Tracking the REPL
+
+`czq-comint-track-repl.el` watches the commands you send to the process and
+tries to infer which REPL is currently active.  New CZQ comint buffers assume
+`bash` until a more specific pattern matches.  The result lives in the
+buffer-local variable `czq-comint-track-repl-name`, while
+`czq-comint-track-repl-last-command` records the most recent command that was
+inspected.  Detection relies on `czq-comint-track-repl-command-alist`, a
+customizable list of regular expressions mapped to REPL symbols (for example,
+`"^python"` → `python`, `"^julia"` → `julia`,
+`"^wolframscript"`/`"^math"` → `mathematica`).  The default entries cover the
+Python, Julia, and Mathematica/WolframScript toolchains along with a handful of
+common shells and REPLs.
+
+You can review or override the detected REPL via:
+
+```elisp
+M-x czq-comint-track-repl-edit
+```
+
+The command displays the current value, allows you to provide a new symbol, and
+accepts an empty response to clear the detection.  Programmatic helpers such as
+`czq-comint--send-command-quietly`, `czq-comint-send-to-buffer`, and
+`czq-comint-send-to-point` automatically register the commands they emit so the
+tracker stays in sync even when you are not typing directly into the comint
+buffer.
+
 ## Building New Helpers
 
 Quiet sends are just one application of the filter stack.  A custom helper can
