@@ -226,8 +226,10 @@ sends/redirects.
 
 WolframScript/Mathematica emits prompts that repaint the current line using
 carriage returns.  CZQ comint detects those sessions and installs the
-`czq-comint-normalize-strip-cr` helper, which converts every `\r\n` to `\n` and
-drops stray `\r` characters so the buffer receives clean Unix line endings.
+`czq-comint-normalize-strip-cr` helper, which converts every `\r\n` to `\n`,
+drops stray `\r`, and trims the padded whitespace that trails `In[n]:=` while
+leaving a single space after the prompt so the cursor lands exactly where the
+native REPL would place it.
 
 With `czq-comint-debug` enabled you will see log entries such as:
 
