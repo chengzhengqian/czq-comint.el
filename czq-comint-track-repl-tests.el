@@ -39,6 +39,18 @@
     (czq-comint-track-repl--input-filter "math -noprompt\n")
     (should (eq czq-comint-track-repl-name 'mathematica))))
 
+(ert-deftest czq-comint-track-repl-mathematica-normalizes-crlf ()
+  "Mathematica normalize filter should simulate carriage returns."
+  (with-temp-buffer
+    (czq-comint-mode)
+    (czq-comint-track-repl-edit "mathematica")
+    (let ((input "\ra\r\r+\r\rb\r\r\n"))
+      (should (equal "a+b\n"
+                     (czq-comint--preoutput-filter input))))
+    (czq-comint-track-repl-edit "python")
+    (should (equal "foo\r\n"
+                   (czq-comint--preoutput-filter "foo\r\n")))))
+
 (ert-deftest czq-comint-track-repl-resets-on-empty ()
   "Manual override accepts empty input to clear the REPL symbol."
   (with-temp-buffer

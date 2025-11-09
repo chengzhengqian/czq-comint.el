@@ -15,6 +15,10 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'czq-comint-normalize)
+
+(declare-function czq-comint-set-normalize-filter "czq-comint" (fn &optional finalize))
+(declare-function czq-comint-clear-normalize-filter "czq-comint" ())
 
 (defgroup czq-comint-track-repl nil
   "Customization options for CZQ comint REPL detection."
@@ -61,6 +65,9 @@ shells and other interpreters."
 (defvar-local czq-comint-track-repl-last-command nil
   "Buffer-local copy of the last command string inspected by the tracker.")
 
+(defvar-local czq-comint-track-repl--normalize-owner nil
+  "Internal marker describing which REPL installed the normalize filter.")
+
 (defun czq-comint-track-repl--normalize-command (command)
   "Return COMMAND trimmed for matching, or nil when blank."
   (let ((trimmed (and command (string-trim command))))
@@ -76,17 +83,49 @@ shells and other interpreters."
                when (string-match-p pattern candidate)
                return name))))
 
+(defun czq-comint-track-repl--normalize-fn (name)
+  "Return a normalization function for REPL NAME, or nil."
+  (pcase name
+    ('mathematica #'czq-comint-track-repl--normalize-mathematica)
+    (_ nil)))
+
+(defun czq-comint-track-repl--normalize-mathematica (chunk)
+  "Normalize CHUNK emitted by WolframScript/Mathematica."
+  (czq-comint-normalize-strip-cr chunk))
+
+(defun czq-comint-track-repl--sync-normalize-filter ()
+  "Ensure the normalize filter matches the current REPL."
+  (let* ((name czq-comint-track-repl-name)
+         (fn (czq-comint-track-repl--normalize-fn name)))
+    (cond
+     ((and fn (eq czq-comint-track-repl--normalize-owner name))
+      nil)
+     (fn
+      (czq-comint-set-normalize-filter
+       fn
+       (lambda ()
+         (setq-local czq-comint-track-repl--normalize-owner nil)))
+      (setq-local czq-comint-track-repl--normalize-owner name))
+     ((and (null fn) czq-comint-track-repl--normalize-owner)
+      (czq-comint-clear-normalize-filter)
+      (setq-local czq-comint-track-repl--normalize-owner nil)))))
+
+(defun czq-comint-track-repl--update-name (detected previous)
+  "Persist DETECTED REPL name and announce when it differs from PREVIOUS."
+  (when detected
+    (setq-local czq-comint-track-repl-name detected)
+    (czq-comint-track-repl--sync-normalize-filter)
+    (when (and czq-comint-track-repl-announce
+               (not (eq previous detected)))
+      (message "[czq-comint] REPL detected: %s" detected))))
+
 (defun czq-comint-track-repl-register-command (command)
   "Record COMMAND and update the detected REPL symbol if applicable."
   (let* ((normalized (czq-comint-track-repl--normalize-command command))
          (detected (czq-comint-track-repl--classify-command normalized))
          (previous czq-comint-track-repl-name))
     (setq-local czq-comint-track-repl-last-command normalized)
-    (when detected
-      (setq-local czq-comint-track-repl-name detected)
-      (when (and czq-comint-track-repl-announce
-                 (not (eq previous detected)))
-        (message "[czq-comint] REPL detected: %s" detected)))
+    (czq-comint-track-repl--update-name detected previous)
     detected))
 
 (defun czq-comint-track-repl--input-filter (command)
@@ -115,6 +154,7 @@ When VALUE is non-nil, use it instead of prompting (intended for tests)."
         (setq-local czq-comint-track-repl-name nil)
       (setq-local czq-comint-track-repl-name
                   (intern (downcase raw))))
+    (czq-comint-track-repl--sync-normalize-filter)
     (message "[czq-comint] REPL %s"
              (czq-comint-track-repl--name->string czq-comint-track-repl-name))
     czq-comint-track-repl-name))

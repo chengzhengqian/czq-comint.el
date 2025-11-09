@@ -22,7 +22,10 @@ explicitly makes the quiet-edit command available even when you are not inside
 
 `czq-comint--preoutput-filter` (defined in `czq-comint.el`) asks
 `czq-comint-send--apply-render-filters` to post-process the fully rendered
-string that would otherwise reach the comint buffer untouched.  Filters live in
+string that would otherwise reach the comint buffer untouched.  Before the
+render stack runs, CZQ comint optionally applies a normalization filter (managed
+by the REPL tracker) so mode-specific cleanups—such as stripping `^M` carriage
+returns—happen independently of quiet/redirect helpers.  Render filters live in
 a buffer-local LIFO stack; each one receives the text produced by the next
 filter in the stack (or the raw string for the most recently registered entry)
 and returns the string to forward downstream.
@@ -194,6 +197,10 @@ customizable list of regular expressions mapped to REPL symbols (for example,
 Python, Julia, and Mathematica/WolframScript toolchains along with a handful of
 common shells and REPLs.
 
+When `czq-comint-track-repl-name` is `mathematica`, CZQ comint automatically
+normalizes `\r\n` line endings to Unix `\n` so WolframScript output no longer
+sprinkles `^M` characters through the buffer.
+
 You can review or override the detected REPL via:
 
 ```elisp
@@ -206,6 +213,49 @@ accepts an empty response to clear the detection.  Programmatic helpers such as
 `czq-comint-send-to-point` automatically register the commands they emit so the
 tracker stays in sync even when you are not typing directly into the comint
 buffer.
+
+## Normalization Filters
+
+Before render filters run, CZQ comint can pass each rendered chunk through a
+single normalization filter managed by the REPL tracker (or user code).  This
+stage is ideal for cleaning up control characters, simulating carriage returns,
+or applying any REPL-specific fix-ups that should happen regardless of quiet
+sends/redirects.
+
+### Automatic Mathematica Cleanup
+
+WolframScript/Mathematica emits prompts that repaint the current line using
+carriage returns.  CZQ comint detects those sessions and installs the
+`czq-comint-normalize-strip-cr` helper, which converts every `\r\n` to `\n` and
+drops stray `\r` characters so the buffer receives clean Unix line endings.
+
+With `czq-comint-debug` enabled you will see log entries such as:
+
+```
+[czq-comint] normalize-filter install active
+[czq-comint] normalize-filter mathematica len=185→162
+```
+
+indicating that the normalizer reduced the chunk’s length after stripping the
+extra carriage returns.  Clearing or changing the REPL automatically removes the
+filter (`normalize-filter cleared`).
+
+### Manual Installation
+
+You can supply your own normalizer when experimenting with other REPLs:
+
+```elisp
+(with-current-buffer "*czq-demo*"
+  ;; Example: drop ANSI color sequences before render filters see them.
+  (czq-comint-set-normalize-filter
+   (lambda (chunk)
+     (replace-regexp-in-string "\\x1b\\[[0-9;]*m" "" chunk))))
+```
+
+Later, call `czq-comint-clear-normalize-filter` to remove the hook.  Because the
+normalization stage feeds directly into the render-filter stack, quiet sends and
+redirect helpers automatically see the cleaned-up text without any additional
+changes.
 
 ## Building New Helpers
 

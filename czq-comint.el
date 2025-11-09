@@ -25,6 +25,7 @@
 (require 'czq-comint-dirtrack)
 (require 'czq-comint-completion)
 (require 'czq-comint-track-repl)
+(require 'czq-comint-normalize)
 
 (declare-function czq-comint-send--apply-render-filters "czq-comint-send" (chunk))
 
@@ -97,6 +98,12 @@ body as a string and the remaining attribute alist."
 (defvar-local czq-comint-output-enabled t
   "When non-nil, emit text produced by the CZQ comint pre-output filter.")
 
+(defvar-local czq-comint--normalize-filter nil
+  "Optional normalization filter applied before render filters.")
+
+(defvar-local czq-comint--normalize-finalize nil
+  "Cleanup function run when the normalization filter changes.")
+
 (defun czq-comint--handle-elisp (body attrs)
   "Evaluate BODY as Emacs Lisp and optionally return printed results.
 
@@ -140,12 +147,25 @@ FORMAT-STRING and ARGS follow `message'."
   "Return a short time stamp for debug messages."
   (format-time-string "%H:%M:%S"))
 
+(defun czq-comint--debug-escape-control (string)
+  "Return STRING with control characters rendered visibly."
+  (when string
+    (let ((result (buffer-string)))
+      (with-temp-buffer
+        (dolist (char (string-to-list string))
+          (cond
+           ((= char ?\r) (insert "\\r"))
+           ((= char ?\n) (insert "\\n\n"))
+           ((>= char 32) (insert char))
+           (t (insert (format "\\x%02X" char)))))
+        (buffer-string)))))
+
 (defun czq-comint--debug-summarize (value &optional limit)
   "Return a truncated string representation of VALUE for debug output.
 LIMIT defaults to 120 characters."
   (let* ((limit (or limit 120))
          (raw (if (stringp value)
-                  (replace-regexp-in-string "\n" "\\\\n" value)
+                  (czq-comint--debug-escape-control value)
                 (prin1-to-string value)))
          (len (length raw)))
     (if (<= len limit)
@@ -332,6 +352,19 @@ before being concatenated."
         (push filtered pieces)))
     (apply #'concat (nreverse pieces))))
 
+(defun czq-comint--apply-normalize-filter (chunk)
+  "Apply the buffer's normalization filter to CHUNK."
+  (if (and chunk czq-comint--normalize-filter)
+      (let ((before chunk)
+            (after (funcall czq-comint--normalize-filter chunk)))
+        (when czq-comint-debug
+          (czq-comint--debug "normalize-filter %s len=%d→%d"
+                             (or czq-comint-track-repl-name 'unknown)
+                             (length before)
+                             (length (or after ""))))
+        after)
+    chunk))
+
 (defun czq-comint--preoutput-filter (output)
   "Comint pre-output filter that processes CZQ structured tags in OUTPUT.
 
@@ -356,15 +389,35 @@ updating buffer-local state for downstream consumers such as completion."
                            (czq-comint--debug-format-tokens tokens))))
     (setq czq-comint--parser-state state)
     (let* ((rendered (czq-comint--accumulate-output tokens))
+           (normalized (czq-comint--apply-normalize-filter rendered))
            (suppressed (not czq-comint-output-enabled)))
       (when czq-comint-debug
         (let ((timestamp (czq-comint--debug-timestamp)))
           (czq-comint--debug "%s rendered (len=%d, suppressed=%s) chunk=%s"
                              timestamp
-                             (length rendered)
+                             (length (or normalized ""))
                              suppressed
-                             (czq-comint--debug-summarize rendered))))
-      (if suppressed "" rendered))))
+                             (czq-comint--debug-summarize normalized))))
+      (if suppressed "" normalized))))
+
+(defun czq-comint-set-normalize-filter (fn &optional finalize)
+  "Install normalization filter FN with optional FINALIZE callback."
+  (when (functionp czq-comint--normalize-finalize)
+    (funcall czq-comint--normalize-finalize))
+  (setq-local czq-comint--normalize-filter fn)
+  (setq-local czq-comint--normalize-finalize finalize)
+  (when czq-comint-debug
+    (czq-comint--debug "normalize-filter install %s"
+                       (if fn 'active 'nil))))
+
+(defun czq-comint-clear-normalize-filter ()
+  "Remove any active normalization filter."
+  (when (functionp czq-comint--normalize-finalize)
+    (funcall czq-comint--normalize-finalize))
+  (setq-local czq-comint--normalize-filter nil)
+  (setq-local czq-comint--normalize-finalize nil)
+  (when czq-comint-debug
+    (czq-comint--debug "normalize-filter cleared")))
 
 (defun czq-comint--local-czq-variables ()
   "Return a sorted list of CZQ comint-specific buffer-local variables."
@@ -449,6 +502,7 @@ The core functionality is not implemented yet."
   (setq-local czq-comint-output-enabled t)
   (setq-local czq-comint-track-repl-name 'bash)
   (setq-local czq-comint-track-repl-last-command nil)
+  (czq-comint-clear-normalize-filter)
   (czq-comint-completion-refresh)
   (setq-local completion-at-point-functions
               '(czq-comint-completion-at-point))
